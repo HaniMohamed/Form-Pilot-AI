@@ -134,6 +134,51 @@ Schema validation is handled by Pydantic models in `backend/core/schema.py`. The
 - `dropdown`/`checkbox` fields must have `options`
 - Fields cannot reference themselves in visibility conditions
 
+## API Endpoints
+
+The backend exposes a REST API at `/api`. Start the server with:
+
+```bash
+uvicorn backend.api.app:app --reload
+```
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/chat` | Process a user message in a form-filling conversation |
+| POST | `/api/validate-schema` | Validate a form schema JSON |
+| GET | `/api/schemas` | List available example schemas |
+| GET | `/api/schemas/{filename}` | Get a specific example schema |
+| POST | `/api/sessions/reset` | Reset/delete a conversation session |
+| GET | `/api/health` | Health check |
+
+### POST /api/chat
+
+```json
+// Request
+{
+  "form_schema": { "form_id": "...", "fields": [...] },
+  "user_message": "I want annual leave",
+  "conversation_id": "optional-uuid"
+}
+
+// Response
+{
+  "action": { "action": "ASK_DATE", "field_id": "start_date", ... },
+  "conversation_id": "uuid",
+  "answers": { "leave_type": "Annual" }
+}
+```
+
+### POST /api/validate-schema
+
+```json
+// Request
+{ "form_schema": { "form_id": "...", "fields": [...] } }
+
+// Response
+{ "valid": true, "errors": [] }
+```
+
 ## Development Status
 
 | Phase | Description | Status |
@@ -144,7 +189,7 @@ Schema validation is handled by Pydantic models in `backend/core/schema.py`. The
 | 3 | Form State Manager | Done |
 | 4 | AI Action Protocol | Done |
 | 5 | LangChain Structured Chat Agent | Done |
-| 6 | Backend API Layer | Pending |
+| 6 | Backend API Layer | Done |
 | 7 | Flutter Web App (Simulation & Testing) | Pending |
 | 8 | Testing & Quality Assurance | Pending |
 | 9 | Documentation & Deployment | Pending |
