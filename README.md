@@ -143,7 +143,7 @@ Schema validation is handled by Pydantic models in `backend/core/schema.py`. The
 | 2 | Deterministic Visibility Evaluator | Done |
 | 3 | Form State Manager | Done |
 | 4 | AI Action Protocol | Done |
-| 5 | LangChain Structured Chat Agent | Pending |
+| 5 | LangChain Structured Chat Agent | Done |
 | 6 | Backend API Layer | Pending |
 | 7 | Flutter Web App (Simulation & Testing) | Pending |
 | 8 | Testing & Quality Assurance | Pending |
