@@ -1,0 +1,29 @@
+# Version control
+.git
+.gitignore
+
+# Python
+__pycache__
+*.pyc
+*.pyo
+.venv
+venv
+.env
+
+# Flutter
+flutter_web/
+.dart_tool/
+
+# IDE
+.idea/
+.vscode/
+.cursor/
+*.swp
+
+# Docs and plans (not needed in image)
+.plan/
+docs/
+*.md
+
+# Tests (not needed in production image)
+backend/tests/

@@ -51,6 +51,12 @@ form_pilot_ai/
 │       ├── screens/          # Simulation screen (three-panel layout)
 │       ├── services/         # ChatService (backend HTTP communication)
 │       └── widgets/          # Chat panel, dynamic widgets, debug panel
+├── docs/                     # Project documentation
+│   ├── schema_guide.md       # How to write a form schema
+│   ├── api_reference.md      # Backend API endpoints and contracts
+│   └── action_protocol.md    # AI action types and JSON formats
+├── Dockerfile                # Backend Docker image
+├── docker-compose.yml        # Local development with Docker
 ├── .env.example              # Environment variable template
 └── .plan/                    # Project plan and TODO
 ```
@@ -108,6 +114,14 @@ python -m pytest backend/tests/ -v
 | `test_llm_resilience.py` | 15 | Malformed JSON, retries, LLM exceptions (extraction + one-at-a-time) |
 | `test_api_e2e.py` | 7 | Multi-turn HTTP API conversations |
 | `test_bulk_extraction.py` | 9 | Bulk extraction scenarios: complete, partial, gibberish, conditional |
+
+## Documentation
+
+| Document | Description |
+|----------|-------------|
+| [Schema Guide](docs/schema_guide.md) | How to write a form schema |
+| [API Reference](docs/api_reference.md) | Backend API endpoints and contracts |
+| [Action Protocol](docs/action_protocol.md) | AI action types and JSON formats |
 
 ## Conversation Flow
 
@@ -237,6 +251,28 @@ Features:
 - Responsive layout — tabs on narrow screens, side-by-side on wide screens
 - Reset conversation, view raw schema JSON
 
+## Docker
+
+### Build and run with Docker Compose (development)
+
+```bash
+# Copy and configure environment
+cp .env.example .env
+# Edit .env with your LLM credentials
+
+# Start the backend
+docker compose up --build
+```
+
+The backend is available at `http://localhost:8000`.
+
+### Build the Docker image manually
+
+```bash
+docker build -t formpilot-ai .
+docker run -p 8000:8000 --env-file .env formpilot-ai
+```
+
 ## Development Status
 
 | Phase | Description | Status |
@@ -250,4 +286,4 @@ Features:
 | 6 | Backend API Layer | Done |
 | 7 | Flutter Web App (Simulation & Testing) | Done |
 | 8 | Testing & Quality Assurance | Done |
-| 9 | Documentation & Deployment | Pending |
+| 9 | Documentation & Deployment | Done |
