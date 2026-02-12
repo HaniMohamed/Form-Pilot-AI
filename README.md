@@ -45,10 +45,10 @@ form_pilot_ai/
 │   └── tests/                # Unit and integration tests
 ├── flutter_web/              # Flutter web app (simulation & testing)
 │   └── lib/
-│       ├── models/           # Dart data models
-│       ├── screens/          # App screens
-│       ├── services/         # Backend communication
-│       └── widgets/          # Reusable UI widgets
+│       ├── models/           # Dart data models (FormSchema, AIAction)
+│       ├── screens/          # Simulation screen (three-panel layout)
+│       ├── services/         # ChatService (backend HTTP communication)
+│       └── widgets/          # Chat panel, dynamic widgets, debug panel
 ├── .env.example              # Environment variable template
 └── .plan/                    # Project plan and TODO
 ```
@@ -179,6 +179,22 @@ uvicorn backend.api.app:app --reload
 { "valid": true, "errors": [] }
 ```
 
+## Flutter Web App
+
+The Flutter web app provides a three-panel simulation interface:
+
+| Panel | Purpose |
+|-------|---------|
+| **Chat Panel** (left) | Conversational message list with text input |
+| **Widget Panel** (center) | Renders dynamic UI widgets from AI actions (dropdowns, date pickers, checkboxes, etc.) |
+| **Debug Panel** (right) | Real-time view of answers, last action JSON, and field visibility status |
+
+Features:
+- Schema selector — choose from example schemas or paste custom JSON
+- Backend health indicator — shows connection status
+- Responsive layout — tabs on narrow screens, side-by-side on wide screens
+- Reset conversation, view raw schema JSON
+
 ## Development Status
 
 | Phase | Description | Status |
@@ -190,6 +206,6 @@ uvicorn backend.api.app:app --reload
 | 4 | AI Action Protocol | Done |
 | 5 | LangChain Structured Chat Agent | Done |
 | 6 | Backend API Layer | Done |
-| 7 | Flutter Web App (Simulation & Testing) | Pending |
+| 7 | Flutter Web App (Simulation & Testing) | Done |
 | 8 | Testing & Quality Assurance | Pending |
 | 9 | Documentation & Deployment | Pending |
