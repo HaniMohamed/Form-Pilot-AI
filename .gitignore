@@ -1,0 +1,52 @@
+# =======================
+# Python Backend
+# =======================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+*.egg
+venv/
+.venv/
+env/
+.env
+.env.*
+!.env.example
+*.log
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# =======================
+# Flutter Web App
+# =======================
+flutter_web/.dart_tool/
+flutter_web/.packages
+flutter_web/build/
+flutter_web/.flutter-plugins
+flutter_web/.flutter-plugins-dependencies
+flutter_web/.pub-cache/
+flutter_web/.pub/
+flutter_web/pubspec.lock
+
+# =======================
+# IDE / Editor
+# =======================
+.idea/
+.vscode/
+.cursor/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# =======================
+# Plan / Docs (keep tracked)
+# =======================
+# .plan/ and docs/ are tracked intentionally
