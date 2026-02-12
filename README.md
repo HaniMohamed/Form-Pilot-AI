@@ -84,6 +84,28 @@ flutter pub get
 flutter run -d chrome
 ```
 
+## Running Tests
+
+```bash
+# From the project root, with venv activated:
+python -m pytest backend/tests/ -v
+```
+
+**259 tests** across 8 test modules:
+
+| Module | Count | Coverage |
+|--------|-------|----------|
+| `test_schema.py` | 34 | Schema validation, field types, visibility references |
+| `test_visibility.py` | 56 | All 7 condition operators, AND logic, date comparisons |
+| `test_form_state.py` | 49 | State management, answer CRUD, cascading visibility |
+| `test_actions.py` | 25 | Action builders, model serialization |
+| `test_orchestrator.py` | 20 | Orchestrator with mock LLM, intent routing |
+| `test_api.py` | 21 | API endpoint integration, session store |
+| `test_e2e.py` | 12 | Full multi-turn conversation flows |
+| `test_boundary.py` | 24 | Edge cases: 50+ fields, nested deps, date boundaries |
+| `test_llm_resilience.py` | 11 | Malformed JSON, retries, LLM exceptions |
+| `test_api_e2e.py` | 7 | Multi-turn HTTP API conversations |
+
 ## Supported LLM Providers
 
 | Provider | Environment Variables |
@@ -207,5 +229,5 @@ Features:
 | 5 | LangChain Structured Chat Agent | Done |
 | 6 | Backend API Layer | Done |
 | 7 | Flutter Web App (Simulation & Testing) | Done |
-| 8 | Testing & Quality Assurance | Pending |
+| 8 | Testing & Quality Assurance | Done |
 | 9 | Documentation & Deployment | Pending |
