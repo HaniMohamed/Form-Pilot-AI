@@ -123,6 +123,48 @@ class FormStateManager:
         visible_ids = {f.id for f in self.get_visible_fields()}
         return {k: v for k, v in self.answers.items() if k in visible_ids}
 
+    def set_answers_bulk(self, answers: dict[str, Any]) -> tuple[dict[str, Any], dict[str, str]]:
+        """Set multiple answers at once, skipping invalid ones.
+
+        Attempts to set each answer individually, collecting successes
+        and failures. Handles cascading visibility after all answers are set.
+
+        Args:
+            answers: Dict of {field_id: value} pairs to set.
+
+        Returns:
+            A tuple of (accepted, rejected) where:
+            - accepted: {field_id: value} for successfully stored answers
+            - rejected: {field_id: error_message} for answers that failed validation
+        """
+        accepted: dict[str, Any] = {}
+        rejected: dict[str, str] = {}
+
+        for field_id, value in answers.items():
+            try:
+                field = self._get_field_by_id(field_id)
+                if field is None:
+                    rejected[field_id] = f"Field '{field_id}' does not exist in the schema"
+                    continue
+
+                # Validate the answer
+                self._validate_answer(field, value)
+
+                # Store without cascading yet (we'll cascade once at the end)
+                self.answers[field_id] = value
+                accepted[field_id] = value
+
+            except AnswerValidationError as e:
+                rejected[field_id] = e.message
+            except Exception as e:
+                rejected[field_id] = str(e)
+
+        # Handle cascading visibility once after all answers are set
+        if accepted:
+            self._handle_cascading_visibility()
+
+        return accepted, rejected
+
     # -----------------------------------------------------------------
     # Conversation history
     # -----------------------------------------------------------------

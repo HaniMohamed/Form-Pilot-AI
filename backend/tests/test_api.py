@@ -38,11 +38,10 @@ class MockLLM:
     async def ainvoke(self, messages, **kwargs):
         self.call_count += 1
         if not self.responses:
-            # Default: return an answer intent for the next field
+            # Default: return multi_answer extraction with one field
             response_dict = {
-                "intent": "answer",
-                "field_id": "leave_type",
-                "value": "Annual",
+                "intent": "multi_answer",
+                "answers": {"leave_type": "Annual"},
                 "message": "Got it!",
             }
         else:
@@ -165,7 +164,10 @@ class TestChat:
     def test_first_message_creates_session(self):
         """First chat message should create a new session and return an action."""
         mock_llm = MockLLM([
-            {"intent": "answer", "field_id": "leave_type", "value": "Annual", "message": "Got it!"}
+            # Extraction response
+            {"intent": "multi_answer",
+             "answers": {"leave_type": "Annual"},
+             "message": "Got it!"},
         ])
         client, store, _ = _create_test_app(mock_llm)
         schema = _load_leave_schema()
@@ -184,7 +186,7 @@ class TestChat:
         assert store.count() == 1
 
     def test_empty_first_message_returns_initial_action(self):
-        """Empty first message should return the initial greeting action."""
+        """Empty first message should return the initial greeting MESSAGE action."""
         client, store, _ = _create_test_app()
         schema = _load_leave_schema()
 
@@ -197,20 +199,26 @@ class TestChat:
         data = response.json()
         assert "conversation_id" in data
         assert "action" in data
-        # Initial action should be a greeting or first question
+        # Initial action should be a greeting MESSAGE
         action = data["action"]
-        assert "action" in action  # action key holds the action type (e.g. ASK_DROPDOWN)
+        assert action["action"] == "MESSAGE"
+        assert "text" in action
 
     def test_session_persistence(self):
         """Multiple messages with the same conversation_id should use the same session."""
         mock_llm = MockLLM([
-            {"intent": "answer", "field_id": "leave_type", "value": "Annual", "message": "Got it!"},
-            {"intent": "answer", "field_id": "start_date", "value": "2026-03-01", "message": "Start date set."},
+            # Extraction: captures leave_type
+            {"intent": "multi_answer",
+             "answers": {"leave_type": "Annual"},
+             "message": "Annual leave captured."},
+            # Follow-up: start_date
+            {"intent": "answer", "field_id": "start_date", "value": "2026-03-01",
+             "message": "Start date set."},
         ])
         client, store, _ = _create_test_app(mock_llm)
         schema = _load_leave_schema()
 
-        # First message
+        # First message — triggers extraction
         r1 = client.post("/api/chat", json={
             "form_schema": schema,
             "user_message": "I want annual leave",
@@ -218,7 +226,7 @@ class TestChat:
         cid = r1.json()["conversation_id"]
         assert store.count() == 1
 
-        # Second message with same conversation_id
+        # Second message with same conversation_id — one-at-a-time
         r2 = client.post("/api/chat", json={
             "form_schema": schema,
             "user_message": "Starting March 1st",
@@ -250,7 +258,7 @@ class TestChat:
     def test_custom_conversation_id(self):
         """Client can provide a custom conversation_id."""
         mock_llm = MockLLM([
-            {"intent": "answer", "field_id": "leave_type", "value": "Sick", "message": "Ok."}
+            {"intent": "multi_answer", "answers": {"leave_type": "Sick"}, "message": "Ok."},
         ])
         client, store, _ = _create_test_app(mock_llm)
         schema = _load_leave_schema()
@@ -303,7 +311,7 @@ class TestSessionReset:
 
     def test_reset_existing_session(self):
         mock_llm = MockLLM([
-            {"intent": "answer", "field_id": "leave_type", "value": "Annual", "message": "Ok"}
+            {"intent": "multi_answer", "answers": {"leave_type": "Annual"}, "message": "Ok"},
         ])
         client, store, _ = _create_test_app(mock_llm)
         schema = _load_leave_schema()

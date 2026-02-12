@@ -47,9 +47,10 @@ returning a final JSON payload for user review and submission
 2.  Deterministic Logic, Probabilistic Language
     -   All conditions are evaluated in code\
     -   AI only reacts to evaluated state
-3.  One Field at a Time
-    -   The agent always asks for exactly one missing field\
-    -   Never assumes values\
+3.  Two-Phase Conversation
+    -   Phase 1: Bulk extraction from free text (multi_answer intent)\
+    -   Phase 2: One field at a time for remaining missing fields\
+    -   Never assumes values — only extracts what the user explicitly stated\
     -   Never skips required fields
 
 ------------------------------------------------------------------------
@@ -216,11 +217,24 @@ def is_field_visible(field, answers):
 
 ## 9. Conversation Flow
 
-1.  Web app sends schema + answers + user message\
-2.  Backend evaluates visibility and missing fields\
-3.  AI selects next field and returns one action\
-4.  Web app executes UI action and returns value\
-5.  Repeat until complete
+### Two-Phase Flow
+
+**Phase 1 — Bulk Extraction:**
+1.  AI greets the user and asks them to describe all their form data
+2.  User provides a free-text description
+3.  LLM extracts all possible field values from the text (multi_answer intent)
+4.  Valid answers are stored; invalid ones are silently skipped
+
+**Phase 2 — One-at-a-Time Follow-Up:**
+5.  For any remaining missing required fields, AI asks one field at a time
+6.  Web app executes UI action and returns value
+7.  Repeat until all required fields are complete
+
+### API Flow per Turn
+1.  Web app sends schema + user message + conversation_id
+2.  Backend evaluates visibility and missing fields
+3.  AI returns the appropriate action (ASK_* or FORM_COMPLETE)
+4.  Repeat until complete
 
 ------------------------------------------------------------------------
 

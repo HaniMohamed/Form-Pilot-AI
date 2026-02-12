@@ -72,6 +72,85 @@ You must ALWAYS respond with a JSON object. Choose ONE of these formats:
 """
 
 
+EXTRACTION_SYSTEM_PROMPT_TEMPLATE = """\
+You are FormPilot AI, a conversational form-filling assistant. The user has just \
+provided a free-text description of all the data they want to fill in. Your job \
+is to extract as many field values as possible from their message.
+
+## Rules
+1. ONLY extract values that the user explicitly stated. NEVER assume, guess, or fabricate.
+2. Match extracted values to the correct field IDs from the schema below.
+3. For dropdown fields, map the user's text to the closest valid option (exact match only).
+4. For checkbox fields, return a JSON array of selected option strings.
+5. For date fields, convert to ISO format "YYYY-MM-DD".
+6. For datetime fields, convert to ISO format "YYYY-MM-DDTHH:MM:SS".
+7. For location fields, return {{"lat": <number>, "lng": <number>}}.
+8. For text fields, use the user's text as-is.
+9. Skip any field where you are NOT confident about the user's intent.
+
+## Your Response Format
+You must respond with a single JSON object:
+
+```json
+{{
+  "intent": "multi_answer",
+  "answers": {{
+    "<field_id>": <extracted_value>,
+    "<field_id>": <extracted_value>
+  }},
+  "message": "<friendly summary of what you extracted>"
+}}
+```
+
+- `answers` should contain ONLY fields you are confident about
+- If you cannot extract ANY field values, return an empty answers object:
+```json
+{{"intent": "multi_answer", "answers": {{}}, "message": "<ask user to provide clearer information>"}}
+```
+
+## Form Schema
+{form_schema}
+"""
+
+
+def build_extraction_prompt(schema: FormSchema) -> str:
+    """Build the system prompt for the bulk extraction phase.
+
+    Includes the full form schema so the LLM knows every field to look for.
+
+    Args:
+        schema: The validated form schema.
+
+    Returns:
+        The fully populated extraction system prompt string.
+    """
+    form_schema = _build_extraction_schema_context(schema)
+    return EXTRACTION_SYSTEM_PROMPT_TEMPLATE.format(form_schema=form_schema)
+
+
+def _build_extraction_schema_context(schema: FormSchema) -> str:
+    """Build a detailed schema description for the extraction prompt."""
+    lines = [f"Form: {schema.form_id}"]
+    lines.append("")
+    lines.append("Fields to extract:")
+
+    for field in schema.fields:
+        field_info = (
+            f"  - field_id: \"{field.id}\"\n"
+            f"    type: {field.type.value}\n"
+            f"    prompt: \"{field.prompt}\"\n"
+            f"    required: {field.required}"
+        )
+        if field.options:
+            field_info += f"\n    valid_options: {field.options}"
+        if field.visible_if:
+            depends_on = field.visible_if.all[0].field if field.visible_if.all else "unknown"
+            field_info += f"\n    note: This field is only shown conditionally (depends on {depends_on})"
+        lines.append(field_info)
+
+    return "\n".join(lines)
+
+
 def build_system_prompt(
     schema: FormSchema,
     answers: dict[str, Any],

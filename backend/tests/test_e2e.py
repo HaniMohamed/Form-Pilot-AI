@@ -2,9 +2,12 @@
 End-to-end tests for complete conversation flows.
 
 Uses mock LLMs to test full multi-turn conversations from start to FORM_COMPLETE.
+Tests account for the two-phase flow:
+1. Greeting (MESSAGE) → User describes data → Bulk extraction (multi_answer)
+2. Follow-up: one-at-a-time for remaining missing fields
 
 Tests cover:
-- Full leave request flow (happy path)
+- Full leave request flow (happy path with extraction + follow-up)
 - Full incident report flow with conditional visibility
 - Correction flow (change a previous answer, re-evaluate)
 - All-optional-fields form completes immediately
@@ -59,52 +62,50 @@ class TestFullLeaveRequestFlow:
 
     @pytest.mark.asyncio
     async def test_annual_leave_happy_path(self):
-        """Walk through annual leave: 4 required fields → FORM_COMPLETE."""
+        """User provides leave type in description → extraction → follow-up for the rest."""
         schema = _load_schema("leave_request")
         state = FormStateManager(schema)
 
         llm = SequenceLLM([
-            {"intent": "answer", "field_id": "leave_type", "value": "Annual",
-             "message": "Annual leave, got it!"},
-            {"intent": "answer", "field_id": "start_date", "value": "2026-03-01",
-             "message": "Start date set."},
+            # Extraction: user mentions annual leave + start date
+            {"intent": "multi_answer",
+             "answers": {"leave_type": "Annual", "start_date": "2026-03-01"},
+             "message": "I captured your leave type and start date."},
+            # Follow-up: end_date
             {"intent": "answer", "field_id": "end_date", "value": "2026-03-05",
              "message": "End date set."},
+            # Follow-up: reason
             {"intent": "answer", "field_id": "reason", "value": "Family vacation",
              "message": "Reason recorded."},
         ])
 
         orch = FormOrchestrator(state, llm)
 
-        # Initial action should ask for the first field
+        # Initial action should be a greeting MESSAGE
         initial = orch.get_initial_action()
-        assert initial["action"] == "ASK_DROPDOWN"
-        assert initial["field_id"] == "leave_type"
+        assert initial["action"] == "MESSAGE"
+        assert "text" in initial
 
-        # Turn 1: leave_type
-        a1 = await orch.process_user_message("I want annual leave")
+        # Turn 1: Extraction — user provides description
+        a1 = await orch.process_user_message("I want annual leave starting March 1st 2026")
         assert a1["action"] == "ASK_DATE"
-        assert a1["field_id"] == "start_date"
+        assert a1["field_id"] == "end_date"
         assert state.get_answer("leave_type") == "Annual"
+        assert state.get_answer("start_date") == "2026-03-01"
 
-        # Turn 2: start_date
-        a2 = await orch.process_user_message("March 1st 2026")
-        assert a2["action"] == "ASK_DATE"
-        assert a2["field_id"] == "end_date"
+        # Turn 2: end_date
+        a2 = await orch.process_user_message("March 5th 2026")
+        assert a2["action"] == "ASK_TEXT"
+        assert a2["field_id"] == "reason"
 
-        # Turn 3: end_date
-        a3 = await orch.process_user_message("March 5th 2026")
-        assert a3["action"] == "ASK_TEXT"
-        assert a3["field_id"] == "reason"
+        # Turn 3: reason → form complete
+        a3 = await orch.process_user_message("Family vacation")
+        assert a3["action"] == "FORM_COMPLETE"
+        assert "data" in a3
+        assert a3["data"]["leave_type"] == "Annual"
+        assert a3["data"]["reason"] == "Family vacation"
 
-        # Turn 4: reason → form complete
-        a4 = await orch.process_user_message("Family vacation")
-        assert a4["action"] == "FORM_COMPLETE"
-        assert "data" in a4
-        assert a4["data"]["leave_type"] == "Annual"
-        assert a4["data"]["reason"] == "Family vacation"
-
-        assert llm.call_count == 4
+        assert llm.call_count == 3
 
     @pytest.mark.asyncio
     async def test_sick_leave_with_conditional_field(self):
@@ -114,14 +115,12 @@ class TestFullLeaveRequestFlow:
 
         # medical_certificate is a checkbox, so value must be a list
         llm = SequenceLLM([
-            {"intent": "answer", "field_id": "leave_type", "value": "Sick",
-             "message": "Sick leave noted."},
-            {"intent": "answer", "field_id": "start_date", "value": "2026-04-01",
-             "message": "Start date set."},
-            {"intent": "answer", "field_id": "end_date", "value": "2026-04-03",
-             "message": "End date set."},
-            {"intent": "answer", "field_id": "reason", "value": "Flu",
-             "message": "Reason noted."},
+            # Extraction: leave type + dates + reason extracted
+            {"intent": "multi_answer",
+             "answers": {"leave_type": "Sick", "start_date": "2026-04-01",
+                         "end_date": "2026-04-03", "reason": "Flu"},
+             "message": "Captured leave details."},
+            # Follow-up: medical_certificate (now visible because Sick)
             {"intent": "answer", "field_id": "medical_certificate", "value": ["Yes"],
              "message": "Certificate noted."},
         ])
@@ -129,18 +128,42 @@ class TestFullLeaveRequestFlow:
         orch = FormOrchestrator(state, llm)
         orch.get_initial_action()
 
-        await orch.process_user_message("Sick leave")
-        await orch.process_user_message("April 1st")
-        await orch.process_user_message("April 3rd")
+        # Extraction — captures most fields, but medical_certificate is still needed
+        a1 = await orch.process_user_message("Sick leave from April 1st to 3rd, reason is Flu")
+        assert a1["action"] == "ASK_CHECKBOX"
+        assert a1["field_id"] == "medical_certificate"
 
-        # After reason, next should be medical_certificate (required, visible for Sick)
-        a4 = await orch.process_user_message("Flu")
-        assert a4["action"] == "ASK_CHECKBOX"
-        assert a4["field_id"] == "medical_certificate"
+        # Answer medical_certificate → form complete
+        a2 = await orch.process_user_message("Yes")
+        assert a2["action"] == "FORM_COMPLETE"
+        assert a2["data"]["medical_certificate"] == ["Yes"]
 
-        a5 = await orch.process_user_message("Yes")
-        assert a5["action"] == "FORM_COMPLETE"
-        assert a5["data"]["medical_certificate"] == ["Yes"]
+    @pytest.mark.asyncio
+    async def test_all_fields_in_extraction(self):
+        """User provides everything in one message — FORM_COMPLETE after extraction."""
+        schema = _load_schema("leave_request")
+        state = FormStateManager(schema)
+
+        llm = SequenceLLM([
+            {"intent": "multi_answer",
+             "answers": {
+                 "leave_type": "Annual",
+                 "start_date": "2026-05-01",
+                 "end_date": "2026-05-10",
+                 "reason": "Holiday trip",
+             },
+             "message": "All fields captured!"},
+        ])
+
+        orch = FormOrchestrator(state, llm)
+        orch.get_initial_action()
+
+        result = await orch.process_user_message(
+            "Annual leave from May 1st to May 10th for a holiday trip"
+        )
+        assert result["action"] == "FORM_COMPLETE"
+        assert result["data"]["leave_type"] == "Annual"
+        assert result["data"]["end_date"] == "2026-05-10"
 
 
 # --- E2E: Full incident report flow ---
@@ -156,15 +179,16 @@ class TestFullIncidentReportFlow:
         state = FormStateManager(schema)
 
         llm = SequenceLLM([
-            {"intent": "answer", "field_id": "incident_type", "value": "Fire",
-             "message": "Fire incident."},
-            {"intent": "answer", "field_id": "start_date", "value": "2026-01-10",
-             "message": "Start date set."},
-            {"intent": "answer", "field_id": "end_date", "value": "2026-01-15",
-             "message": "End date set."},
+            # Extraction: type + start + end extracted
+            {"intent": "multi_answer",
+             "answers": {"incident_type": "Fire", "start_date": "2026-01-10",
+                         "end_date": "2026-01-15"},
+             "message": "Captured incident details."},
+            # Follow-up: followup_reason (visible because end > start)
             {"intent": "answer", "field_id": "followup_reason",
              "value": "Structural damage assessment needed",
              "message": "Followup noted."},
+            # Follow-up: location
             {"intent": "answer", "field_id": "location",
              "value": {"lat": 24.7136, "lng": 46.6753},
              "message": "Location set."},
@@ -173,18 +197,17 @@ class TestFullIncidentReportFlow:
         orch = FormOrchestrator(state, llm)
         orch.get_initial_action()
 
-        await orch.process_user_message("Fire")
-        await orch.process_user_message("January 10")
-        a3 = await orch.process_user_message("January 15")
-
+        # Extraction
+        a1 = await orch.process_user_message("Fire incident from Jan 10 to Jan 15")
         # followup_reason should appear because end_date > start_date
-        assert a3["field_id"] == "followup_reason"
+        assert a1["field_id"] == "followup_reason"
 
-        await orch.process_user_message("Structural damage assessment needed")
-        a5 = await orch.process_user_message("24.7136, 46.6753")
+        a2 = await orch.process_user_message("Structural damage assessment needed")
+        assert a2["field_id"] == "location"
 
-        assert a5["action"] == "FORM_COMPLETE"
-        assert a5["data"]["followup_reason"] == "Structural damage assessment needed"
+        a3 = await orch.process_user_message("24.7136, 46.6753")
+        assert a3["action"] == "FORM_COMPLETE"
+        assert a3["data"]["followup_reason"] == "Structural damage assessment needed"
 
     @pytest.mark.asyncio
     async def test_incident_without_followup(self):
@@ -193,13 +216,12 @@ class TestFullIncidentReportFlow:
         state = FormStateManager(schema)
 
         llm = SequenceLLM([
-            {"intent": "answer", "field_id": "incident_type", "value": "Accident",
-             "message": "Accident noted."},
-            {"intent": "answer", "field_id": "start_date", "value": "2026-02-20",
-             "message": "Start date set."},
-            {"intent": "answer", "field_id": "end_date", "value": "2026-02-20",
-             "message": "End date set."},
-            # followup_reason should be skipped — next is location
+            # Extraction: same-day incident
+            {"intent": "multi_answer",
+             "answers": {"incident_type": "Accident", "start_date": "2026-02-20",
+                         "end_date": "2026-02-20"},
+             "message": "Captured details."},
+            # Follow-up: location (followup_reason skipped)
             {"intent": "answer", "field_id": "location",
              "value": {"lat": 21.5, "lng": 39.2},
              "message": "Location set."},
@@ -208,16 +230,13 @@ class TestFullIncidentReportFlow:
         orch = FormOrchestrator(state, llm)
         orch.get_initial_action()
 
-        await orch.process_user_message("Accident")
-        await orch.process_user_message("Feb 20")
-        a3 = await orch.process_user_message("Feb 20")
-
+        a1 = await orch.process_user_message("Accident on Feb 20")
         # followup_reason should be skipped — same date
-        assert a3["field_id"] == "location"
+        assert a1["field_id"] == "location"
 
-        a4 = await orch.process_user_message("21.5, 39.2")
-        assert a4["action"] == "FORM_COMPLETE"
-        assert "followup_reason" not in a4["data"]
+        a2 = await orch.process_user_message("21.5, 39.2")
+        assert a2["action"] == "FORM_COMPLETE"
+        assert "followup_reason" not in a2["data"]
 
 
 # --- E2E: Correction flow ---
@@ -228,21 +247,22 @@ class TestCorrectionFlow:
 
     @pytest.mark.asyncio
     async def test_correct_leave_type_mid_conversation(self):
-        """Answer leave_type as Annual, then correct to Emergency."""
+        """Answer leave_type via extraction, then correct to Emergency in follow-up."""
         schema = _load_schema("leave_request")
         state = FormStateManager(schema)
 
         llm = SequenceLLM([
-            {"intent": "answer", "field_id": "leave_type", "value": "Annual",
-             "message": "Annual leave."},
-            {"intent": "answer", "field_id": "start_date", "value": "2026-05-01",
-             "message": "Start set."},
+            # Extraction: Annual leave + start date
+            {"intent": "multi_answer",
+             "answers": {"leave_type": "Annual", "start_date": "2026-05-01"},
+             "message": "Got leave type and start."},
             # User corrects leave_type
             {"intent": "correction", "field_id": "leave_type",
              "message": "Let me change that."},
-            # LLM re-asks leave_type, user says Emergency
+            # Re-asks leave_type, user says Emergency
             {"intent": "answer", "field_id": "leave_type", "value": "Emergency",
              "message": "Emergency leave."},
+            # Continue with remaining fields
             {"intent": "answer", "field_id": "start_date", "value": "2026-05-01",
              "message": "Start set again."},
             {"intent": "answer", "field_id": "end_date", "value": "2026-05-02",
@@ -257,13 +277,15 @@ class TestCorrectionFlow:
         orch = FormOrchestrator(state, llm)
         orch.get_initial_action()
 
-        await orch.process_user_message("Annual leave")
-        await orch.process_user_message("May 1st")
+        # Extraction
+        a1 = await orch.process_user_message("Annual leave from May 1st")
+        assert a1["field_id"] == "end_date"
 
-        # Correction: clear leave_type and re-ask
-        a3 = await orch.process_user_message("Actually, change leave type")
-        assert a3["field_id"] == "leave_type"
+        # Correction
+        a2 = await orch.process_user_message("Actually, change leave type")
+        assert a2["field_id"] == "leave_type"
 
+        # Answer Emergency
         await orch.process_user_message("Emergency")
 
         # Now emergency_contact should become visible
@@ -271,10 +293,10 @@ class TestCorrectionFlow:
         await orch.process_user_message("May 2nd")
         await orch.process_user_message("Family emergency")
 
-        a8 = await orch.process_user_message("Ahmed 0501234567")
-        assert a8["action"] == "FORM_COMPLETE"
-        assert a8["data"]["leave_type"] == "Emergency"
-        assert a8["data"]["emergency_contact"] == "Ahmed 0501234567"
+        a_final = await orch.process_user_message("Ahmed 0501234567")
+        assert a_final["action"] == "FORM_COMPLETE"
+        assert a_final["data"]["leave_type"] == "Emergency"
+        assert a_final["data"]["emergency_contact"] == "Ahmed 0501234567"
 
 
 # --- E2E: Visibility cascade ---
@@ -290,9 +312,11 @@ class TestVisibilityCascade:
         state = FormStateManager(schema)
 
         llm = SequenceLLM([
-            {"intent": "answer", "field_id": "leave_type", "value": "Sick",
+            # Extraction: Sick leave
+            {"intent": "multi_answer",
+             "answers": {"leave_type": "Sick"},
              "message": "Sick leave."},
-            # Now correct to Annual
+            # Correction: change to Annual
             {"intent": "correction", "field_id": "leave_type",
              "message": "Changed."},
             {"intent": "answer", "field_id": "leave_type", "value": "Annual",
@@ -302,6 +326,7 @@ class TestVisibilityCascade:
         orch = FormOrchestrator(state, llm)
         orch.get_initial_action()
 
+        # Extraction
         await orch.process_user_message("Sick leave")
         assert state.get_answer("leave_type") == "Sick"
 
@@ -360,7 +385,9 @@ class TestAllOptionalFields:
         state = FormStateManager(schema)
 
         llm = SequenceLLM([
-            {"intent": "answer", "field_id": "name", "value": "Ahmed",
+            # Extraction: captures name
+            {"intent": "multi_answer",
+             "answers": {"name": "Ahmed"},
              "message": "Name set."},
         ])
 
@@ -368,8 +395,7 @@ class TestAllOptionalFields:
         orch.get_initial_action()
 
         a1 = await orch.process_user_message("Ahmed")
-        # After answering the required field, form should complete
-        # (optional nickname is not required)
+        # After answering the required field via extraction, form should complete
         assert a1["action"] == "FORM_COMPLETE"
 
 
@@ -381,11 +407,15 @@ class TestClarificationFlow:
 
     @pytest.mark.asyncio
     async def test_gibberish_triggers_clarify(self):
-        """LLM returns clarify intent for unintelligible input."""
+        """LLM returns empty extraction, then clarify in follow-up."""
         schema = _load_schema("leave_request")
         state = FormStateManager(schema)
 
         llm = SequenceLLM([
+            # Extraction: nothing found
+            {"intent": "multi_answer", "answers": {},
+             "message": "I couldn't understand. Please provide your leave details."},
+            # One-at-a-time: clarify
             {"intent": "clarify", "message": "I didn't understand. Could you "
              "please tell me the type of leave you want?"},
         ])
@@ -393,11 +423,14 @@ class TestClarificationFlow:
         orch = FormOrchestrator(state, llm)
         orch.get_initial_action()
 
+        # Extraction — nothing found, asks first field
         a1 = await orch.process_user_message("asdfjkl;")
-        # Should re-present the current field (leave_type)
         assert a1["field_id"] == "leave_type"
         assert a1["action"] == "ASK_DROPDOWN"
-        # No answer should have been stored
+
+        # Follow-up clarify
+        a2 = await orch.process_user_message("asdfjkl; again")
+        assert a2["field_id"] == "leave_type"
         assert state.get_answer("leave_type") is None
 
     @pytest.mark.asyncio
@@ -407,6 +440,10 @@ class TestClarificationFlow:
         state = FormStateManager(schema)
 
         llm = SequenceLLM([
+            # Extraction: nothing useful
+            {"intent": "multi_answer", "answers": {},
+             "message": "No data found."},
+            # Follow-up: ask intent
             {"intent": "ask", "message": "Sick leave requires a medical "
              "certificate. Annual leave does not."},
         ])
@@ -414,9 +451,9 @@ class TestClarificationFlow:
         orch = FormOrchestrator(state, llm)
         orch.get_initial_action()
 
-        a1 = await orch.process_user_message("What's the difference between sick and annual?")
-        # Should re-present the current field with the info message
-        assert a1["field_id"] == "leave_type"
+        await orch.process_user_message("tell me about leave types")
+        a2 = await orch.process_user_message("What's the difference between sick and annual?")
+        assert a2["field_id"] == "leave_type"
 
 
 # --- E2E: Conversation history ---
@@ -431,8 +468,11 @@ class TestConversationHistory:
         state = FormStateManager(schema)
 
         llm = SequenceLLM([
-            {"intent": "answer", "field_id": "leave_type", "value": "Annual",
-             "message": "Annual leave."},
+            # Extraction
+            {"intent": "multi_answer",
+             "answers": {"leave_type": "Annual"},
+             "message": "Annual leave captured."},
+            # Follow-up
             {"intent": "answer", "field_id": "start_date", "value": "2026-06-01",
              "message": "Start date set."},
         ])

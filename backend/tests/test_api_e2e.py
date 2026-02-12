@@ -3,6 +3,7 @@ API-level end-to-end tests.
 
 Tests multi-turn conversations through the /api/chat HTTP endpoint,
 verifying session persistence, answer accumulation, and full form completion.
+Accounts for the two-phase flow: greeting MESSAGE → extraction → follow-up.
 
 Uses mock LLM injected via configure_routes.
 """
@@ -68,63 +69,57 @@ class TestMultiTurnConversation:
     def test_full_leave_request_via_api(self):
         """Complete a leave request form through multiple API calls."""
         llm = SequenceMockLLM([
-            {"intent": "answer", "field_id": "leave_type", "value": "Annual",
-             "message": "Annual leave."},
-            {"intent": "answer", "field_id": "start_date", "value": "2026-03-01",
-             "message": "Start date set."},
+            # Extraction: captures leave_type and start_date
+            {"intent": "multi_answer",
+             "answers": {"leave_type": "Annual", "start_date": "2026-03-01"},
+             "message": "Captured leave type and start date."},
+            # Follow-up: end_date
             {"intent": "answer", "field_id": "end_date", "value": "2026-03-05",
              "message": "End date set."},
+            # Follow-up: reason
             {"intent": "answer", "field_id": "reason", "value": "Holiday",
              "message": "Reason recorded."},
         ])
         client, store = _create_app(llm)
         schema = _load_schema("leave_request")
 
-        # Turn 0: Initialize session
+        # Turn 0: Initialize session — should return MESSAGE greeting
         r0 = client.post("/api/chat", json={
             "form_schema": schema,
             "user_message": "",
         })
         assert r0.status_code == 200
         cid = r0.json()["conversation_id"]
-        assert r0.json()["action"]["action"] == "ASK_DROPDOWN"
+        assert r0.json()["action"]["action"] == "MESSAGE"
 
-        # Turn 1: Answer leave_type
+        # Turn 1: User sends description — extraction
         r1 = client.post("/api/chat", json={
             "form_schema": schema,
-            "user_message": "Annual leave",
+            "user_message": "Annual leave starting March 1st",
             "conversation_id": cid,
         })
         assert r1.status_code == 200
         assert r1.json()["action"]["action"] == "ASK_DATE"
+        assert r1.json()["action"]["field_id"] == "end_date"
         assert r1.json()["answers"]["leave_type"] == "Annual"
         assert r1.json()["conversation_id"] == cid
 
-        # Turn 2: start_date
+        # Turn 2: end_date
         r2 = client.post("/api/chat", json={
-            "form_schema": schema,
-            "user_message": "March 1st",
-            "conversation_id": cid,
-        })
-        assert r2.json()["action"]["field_id"] == "end_date"
-        assert "start_date" in r2.json()["answers"]
-
-        # Turn 3: end_date
-        r3 = client.post("/api/chat", json={
             "form_schema": schema,
             "user_message": "March 5th",
             "conversation_id": cid,
         })
-        assert r3.json()["action"]["field_id"] == "reason"
+        assert r2.json()["action"]["field_id"] == "reason"
 
-        # Turn 4: reason → FORM_COMPLETE
-        r4 = client.post("/api/chat", json={
+        # Turn 3: reason → FORM_COMPLETE
+        r3 = client.post("/api/chat", json={
             "form_schema": schema,
             "user_message": "Holiday",
             "conversation_id": cid,
         })
-        assert r4.json()["action"]["action"] == "FORM_COMPLETE"
-        data = r4.json()["action"]["data"]
+        assert r3.json()["action"]["action"] == "FORM_COMPLETE"
+        data = r3.json()["action"]["data"]
         assert data["leave_type"] == "Annual"
         assert data["start_date"] == "2026-03-01"
         assert data["reason"] == "Holiday"
@@ -132,8 +127,11 @@ class TestMultiTurnConversation:
     def test_session_survives_multiple_turns(self):
         """Verify session state persists across API calls."""
         llm = SequenceMockLLM([
-            {"intent": "answer", "field_id": "leave_type", "value": "Sick",
+            # Extraction
+            {"intent": "multi_answer",
+             "answers": {"leave_type": "Sick"},
              "message": "Sick leave."},
+            # Follow-up
             {"intent": "answer", "field_id": "start_date", "value": "2026-04-01",
              "message": "Start date."},
         ])
@@ -147,7 +145,7 @@ class TestMultiTurnConversation:
         })
         cid = r0.json()["conversation_id"]
 
-        # Turn 1
+        # Turn 1: extraction
         r1 = client.post("/api/chat", json={
             "form_schema": schema,
             "user_message": "Sick leave",
@@ -155,7 +153,7 @@ class TestMultiTurnConversation:
         })
         assert r1.json()["answers"] == {"leave_type": "Sick"}
 
-        # Turn 2
+        # Turn 2: follow-up
         r2 = client.post("/api/chat", json={
             "form_schema": schema,
             "user_message": "April 1st",
@@ -171,13 +169,15 @@ class TestMultiTurnConversation:
     def test_reset_and_restart(self):
         """Reset a session and start fresh."""
         llm = SequenceMockLLM([
-            {"intent": "answer", "field_id": "leave_type", "value": "Annual",
+            # Extraction
+            {"intent": "multi_answer",
+             "answers": {"leave_type": "Annual"},
              "message": "Annual."},
         ])
         client, store = _create_app(llm)
         schema = _load_schema("leave_request")
 
-        # Init and answer one field
+        # Init and answer via extraction
         r0 = client.post("/api/chat", json={
             "form_schema": schema,
             "user_message": "",
@@ -210,11 +210,13 @@ class TestMultiTurnConversation:
     def test_two_parallel_sessions(self):
         """Two independent conversations can run simultaneously."""
         llm = SequenceMockLLM([
-            # Session 1: annual leave
-            {"intent": "answer", "field_id": "leave_type", "value": "Annual",
+            # Session 1 extraction: annual leave
+            {"intent": "multi_answer",
+             "answers": {"leave_type": "Annual"},
              "message": "Annual."},
-            # Session 2: sick leave
-            {"intent": "answer", "field_id": "leave_type", "value": "Sick",
+            # Session 2 extraction: sick leave
+            {"intent": "multi_answer",
+             "answers": {"leave_type": "Sick"},
              "message": "Sick."},
         ])
         client, store = _create_app(llm)
@@ -237,7 +239,7 @@ class TestMultiTurnConversation:
         assert cid1 != cid2
         assert store.count() == 2
 
-        # Answer in session 1
+        # Answer in session 1 (extraction)
         r1_a = client.post("/api/chat", json={
             "form_schema": schema,
             "user_message": "Annual",
@@ -245,7 +247,7 @@ class TestMultiTurnConversation:
         })
         assert r1_a.json()["answers"]["leave_type"] == "Annual"
 
-        # Answer in session 2
+        # Answer in session 2 (extraction)
         r2_a = client.post("/api/chat", json={
             "form_schema": schema,
             "user_message": "Sick",
@@ -263,7 +265,9 @@ class TestApiErrorHandling:
     def test_expired_session_creates_new(self):
         """Using an expired session ID creates a new session."""
         llm = SequenceMockLLM([
-            {"intent": "answer", "field_id": "leave_type", "value": "Annual",
+            # New session: extraction
+            {"intent": "multi_answer",
+             "answers": {"leave_type": "Annual"},
              "message": "Annual."},
         ])
         # Session timeout = 0 for immediate expiry
@@ -291,7 +295,7 @@ class TestApiErrorHandling:
             "conversation_id": old_cid,
         })
         assert r1.status_code == 200
-        # Should have answers from this turn
+        # Should have answers from extraction
         assert r1.json()["answers"].get("leave_type") == "Annual"
 
     def test_malformed_schema_in_chat(self):
@@ -315,10 +319,10 @@ class TestApiErrorHandling:
         rv = client.post("/api/validate-schema", json={"form_schema": schema})
         assert rv.json()["valid"] is True
 
-        # Use for chat
+        # Use for chat — initial greeting MESSAGE
         rc = client.post("/api/chat", json={
             "form_schema": schema,
             "user_message": "",
         })
         assert rc.status_code == 200
-        assert rc.json()["action"]["action"] == "ASK_DROPDOWN"
+        assert rc.json()["action"]["action"] == "MESSAGE"

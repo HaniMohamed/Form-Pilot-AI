@@ -576,3 +576,75 @@ class TestFullLeaveScenario:
         assert "emergency_contact" not in visible_ids
 
         assert mgr.is_complete() is True
+
+
+# --- Bulk answer tests ---
+
+
+class TestSetAnswersBulk:
+    """Tests for the set_answers_bulk() method."""
+
+    def test_bulk_all_valid(self, leave_schema):
+        mgr = FormStateManager(leave_schema)
+        accepted, rejected = mgr.set_answers_bulk({
+            "leave_type": "Annual",
+            "start_date": "2026-04-01",
+            "end_date": "2026-04-10",
+            "reason": "Vacation",
+        })
+        assert len(accepted) == 4
+        assert len(rejected) == 0
+        assert mgr.is_complete()
+
+    def test_bulk_partial_valid(self, leave_schema):
+        mgr = FormStateManager(leave_schema)
+        accepted, rejected = mgr.set_answers_bulk({
+            "leave_type": "Annual",
+            "start_date": "not-a-date",  # Invalid
+            "reason": "Vacation",
+        })
+        assert "leave_type" in accepted
+        assert "reason" in accepted
+        assert "start_date" in rejected
+        assert len(rejected) == 1
+        assert mgr.get_answer("leave_type") == "Annual"
+        assert mgr.get_answer("start_date") is None
+
+    def test_bulk_nonexistent_field(self, leave_schema):
+        mgr = FormStateManager(leave_schema)
+        accepted, rejected = mgr.set_answers_bulk({
+            "leave_type": "Annual",
+            "nonexistent": "value",
+        })
+        assert "leave_type" in accepted
+        assert "nonexistent" in rejected
+
+    def test_bulk_invalid_dropdown_value(self, leave_schema):
+        mgr = FormStateManager(leave_schema)
+        accepted, rejected = mgr.set_answers_bulk({
+            "leave_type": "InvalidOption",
+        })
+        assert len(accepted) == 0
+        assert "leave_type" in rejected
+
+    def test_bulk_empty_dict(self, leave_schema):
+        mgr = FormStateManager(leave_schema)
+        accepted, rejected = mgr.set_answers_bulk({})
+        assert len(accepted) == 0
+        assert len(rejected) == 0
+
+    def test_bulk_cascading_visibility(self, leave_schema):
+        """Bulk setting answers should trigger cascading visibility."""
+        mgr = FormStateManager(leave_schema)
+        accepted, rejected = mgr.set_answers_bulk({
+            "leave_type": "Sick",
+            "start_date": "2026-04-01",
+            "end_date": "2026-04-03",
+            "reason": "Flu",
+        })
+        assert len(accepted) == 4
+        # medical_certificate should now be visible (Sick leave)
+        visible_ids = [f.id for f in mgr.get_visible_fields()]
+        assert "medical_certificate" in visible_ids
+        # Form not complete yet — medical_certificate is required
+        assert not mgr.is_complete()

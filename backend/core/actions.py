@@ -186,3 +186,64 @@ def build_message_action(text: str) -> dict:
         "action": ActionType.MESSAGE.value,
         "text": text,
     }
+
+
+def build_extraction_summary_action(
+    accepted: dict[str, Any],
+    rejected: dict[str, str],
+    next_field: FormField | None,
+    visible_answers: dict[str, Any] | None = None,
+    llm_message: str = "",
+) -> dict:
+    """Build a response action after bulk extraction.
+
+    Produces a summary of what was extracted, and then either:
+    - The next ASK_* action for the first missing field, or
+    - FORM_COMPLETE if all required fields were filled during extraction.
+
+    Args:
+        accepted: {field_id: value} pairs that were successfully stored.
+        rejected: {field_id: error_msg} pairs that failed validation.
+        next_field: The next missing required field (None if complete).
+        visible_answers: All visible answers (needed for FORM_COMPLETE).
+        llm_message: Optional message from the LLM to include.
+
+    Returns:
+        An action dict for the UI.
+    """
+    # Build a human-readable summary
+    summary_parts = []
+
+    if llm_message:
+        summary_parts.append(llm_message)
+
+    if accepted:
+        field_names = ", ".join(accepted.keys())
+        summary_parts.append(f"I captured: {field_names}.")
+
+    if rejected:
+        field_names = ", ".join(rejected.keys())
+        summary_parts.append(f"I couldn't process: {field_names}.")
+
+    summary = " ".join(summary_parts) if summary_parts else ""
+
+    # If form is complete after extraction, return FORM_COMPLETE
+    if next_field is None and visible_answers is not None:
+        payload = build_completion_payload(visible_answers)
+        payload["message"] = (
+            summary + " All fields are complete!" if summary
+            else "All fields are complete!"
+        )
+        return payload
+
+    # Otherwise return the next field action with summary
+    if next_field is not None:
+        action = build_action_for_field(next_field)
+        if summary:
+            action["message"] = summary + f" Now, {next_field.prompt}"
+        else:
+            action["message"] = next_field.prompt
+        return action
+
+    # Fallback — shouldn't reach here, but return a message
+    return build_message_action(summary or "Let's continue filling out the form.")

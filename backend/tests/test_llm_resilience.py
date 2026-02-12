@@ -2,7 +2,7 @@
 LLM output resilience tests.
 
 Tests cover:
-- Malformed JSON responses from LLM
+- Malformed JSON responses from LLM (during extraction and one-at-a-time)
 - Unexpected keys in LLM JSON response
 - LLM returns action for wrong field
 - LLM timeout / exception handling
@@ -96,15 +96,15 @@ def _load_leave_schema() -> FormSchema:
         return FormSchema(**json.load(f))
 
 
-# --- Malformed JSON ---
+# --- Malformed JSON (during extraction phase) ---
 
 
 class TestMalformedJson:
     """LLM returns responses that are not valid JSON."""
 
     @pytest.mark.asyncio
-    async def test_completely_invalid_json(self):
-        """LLM returns total garbage — should fall back to MESSAGE action."""
+    async def test_completely_invalid_json_during_extraction(self):
+        """LLM returns total garbage during extraction — should fall back gracefully."""
         schema = _load_leave_schema()
         state = FormStateManager(schema)
         llm = RawTextLLM([
@@ -117,20 +117,22 @@ class TestMalformedJson:
         orch.get_initial_action()
 
         action = await orch.process_user_message("Hello")
-        # Should return a fallback action, not crash
+        # Should return a fallback action (first field), not crash
         assert "action" in action
+        assert action["action"] == "ASK_DROPDOWN"
+        assert action["field_id"] == "leave_type"
         # No answer should be stored
         assert state.get_answer("leave_type") is None
 
     @pytest.mark.asyncio
-    async def test_partial_json(self):
-        """LLM returns truncated JSON."""
+    async def test_partial_json_during_extraction(self):
+        """LLM returns truncated JSON during extraction."""
         schema = _load_leave_schema()
         state = FormStateManager(schema)
         llm = RawTextLLM([
-            '{"intent": "answer", "field_id": "leave_type"',  # truncated
-            '{"intent": "answer", "field_id": "leave_type"',  # truncated again
-            '{"intent": "answer", "field_id": "leave_type"',  # exhausted retries
+            '{"intent": "multi_answer", "answers": {"leave_type"',  # truncated
+            '{"intent": "multi_answer", "answers": {"leave_type"',  # truncated again
+            '{"intent": "multi_answer", "answers": {"leave_type"',  # exhausted retries
         ])
 
         orch = FormOrchestrator(state, llm)
@@ -140,15 +142,14 @@ class TestMalformedJson:
         assert "action" in action
 
     @pytest.mark.asyncio
-    async def test_json_in_markdown_fence(self):
-        """LLM wraps JSON in markdown code fences — should still parse."""
+    async def test_json_in_markdown_fence_extraction(self):
+        """LLM wraps extraction JSON in markdown code fences — should still parse."""
         schema = _load_leave_schema()
         state = FormStateManager(schema)
 
         json_str = json.dumps({
-            "intent": "answer",
-            "field_id": "leave_type",
-            "value": "Annual",
+            "intent": "multi_answer",
+            "answers": {"leave_type": "Annual"},
             "message": "Got it!",
         })
         llm = RawTextLLM([f"```json\n{json_str}\n```"])
@@ -160,15 +161,14 @@ class TestMalformedJson:
         assert state.get_answer("leave_type") == "Annual"
 
     @pytest.mark.asyncio
-    async def test_json_with_surrounding_text(self):
-        """LLM adds text before/after the JSON."""
+    async def test_json_with_surrounding_text_extraction(self):
+        """LLM adds text before/after the extraction JSON."""
         schema = _load_leave_schema()
         state = FormStateManager(schema)
 
         json_str = json.dumps({
-            "intent": "answer",
-            "field_id": "leave_type",
-            "value": "Sick",
+            "intent": "multi_answer",
+            "answers": {"leave_type": "Sick"},
             "message": "Sick leave.",
         })
         llm = RawTextLLM([f"Here's my response: {json_str} Hope that helps!"])
@@ -180,8 +180,8 @@ class TestMalformedJson:
         assert state.get_answer("leave_type") == "Sick"
 
     @pytest.mark.asyncio
-    async def test_empty_response(self):
-        """LLM returns empty string."""
+    async def test_empty_response_during_extraction(self):
+        """LLM returns empty string during extraction."""
         schema = _load_leave_schema()
         state = FormStateManager(schema)
         llm = RawTextLLM(["", "", ""])
@@ -193,6 +193,39 @@ class TestMalformedJson:
         assert "action" in action
 
 
+# --- Malformed JSON in one-at-a-time phase ---
+
+
+class TestMalformedJsonOneAtATime:
+    """LLM returns bad JSON in the one-at-a-time follow-up phase."""
+
+    @pytest.mark.asyncio
+    async def test_invalid_json_in_followup(self):
+        """After extraction, LLM returns garbage in follow-up — fallback message."""
+        schema = _load_leave_schema()
+        state = FormStateManager(schema)
+        llm = RawTextLLM([
+            # Extraction: valid
+            json.dumps({"intent": "multi_answer", "answers": {"leave_type": "Annual"},
+                        "message": "Got it!"}),
+            # Follow-up: garbage
+            "not json",
+            "still not json",
+            "nope",
+        ])
+
+        orch = FormOrchestrator(state, llm)
+        orch.get_initial_action()
+
+        # Extraction
+        await orch.process_user_message("Annual leave")
+
+        # Follow-up with bad LLM response
+        action = await orch.process_user_message("March 1st")
+        assert action["action"] == "MESSAGE"
+        assert "trouble understanding" in action["text"]
+
+
 # --- Unexpected keys ---
 
 
@@ -200,15 +233,14 @@ class TestUnexpectedKeys:
     """LLM returns JSON with extra or missing keys."""
 
     @pytest.mark.asyncio
-    async def test_extra_keys_ignored(self):
-        """Extra keys in LLM response should not cause errors."""
+    async def test_extra_keys_ignored_in_extraction(self):
+        """Extra keys in extraction response should not cause errors."""
         schema = _load_leave_schema()
         state = FormStateManager(schema)
 
         llm = SequenceLLM([{
-            "intent": "answer",
-            "field_id": "leave_type",
-            "value": "Annual",
+            "intent": "multi_answer",
+            "answers": {"leave_type": "Annual"},
             "message": "Got it!",
             "confidence": 0.95,
             "reasoning": "User clearly stated annual",
@@ -222,15 +254,33 @@ class TestUnexpectedKeys:
         assert state.get_answer("leave_type") == "Annual"
 
     @pytest.mark.asyncio
+    async def test_extra_keys_ignored_in_one_at_a_time(self):
+        """Extra keys in one-at-a-time response should not cause errors."""
+        schema = _load_leave_schema()
+        state = FormStateManager(schema)
+
+        llm = SequenceLLM([
+            {"intent": "multi_answer", "answers": {"leave_type": "Annual"}, "message": "Got it!"},
+            {"intent": "answer", "field_id": "start_date", "value": "2026-03-01",
+             "message": "Start set.", "extra": "ignored"},
+        ])
+
+        orch = FormOrchestrator(state, llm)
+        orch.get_initial_action()
+
+        await orch.process_user_message("Annual leave")
+        action = await orch.process_user_message("March 1st")
+        assert state.get_answer("start_date") == "2026-03-01"
+
+    @pytest.mark.asyncio
     async def test_missing_message_key(self):
         """LLM response without 'message' key should still work."""
         schema = _load_leave_schema()
         state = FormStateManager(schema)
 
         llm = SequenceLLM([{
-            "intent": "answer",
-            "field_id": "leave_type",
-            "value": "Annual",
+            "intent": "multi_answer",
+            "answers": {"leave_type": "Annual"},
             # No 'message' key
         }])
 
@@ -246,16 +296,18 @@ class TestUnexpectedKeys:
         schema = _load_leave_schema()
         state = FormStateManager(schema)
 
-        llm = SequenceLLM([{
-            "intent": "answer",
-            "field_id": "leave_type",
-            # Missing 'value' key
-            "message": "I think you want annual leave.",
-        }])
+        llm = SequenceLLM([
+            # Extraction: nothing
+            {"intent": "multi_answer", "answers": {}, "message": "Nothing."},
+            # One-at-a-time: answer with no value
+            {"intent": "answer", "field_id": "leave_type",
+             "message": "I think you want annual leave."},
+        ])
 
         orch = FormOrchestrator(state, llm)
         orch.get_initial_action()
 
+        await orch.process_user_message("something")
         action = await orch.process_user_message("Annual leave")
         # Should not crash; should re-ask the field
         assert "action" in action
@@ -273,12 +325,10 @@ class TestWrongField:
         schema = _load_leave_schema()
         state = FormStateManager(schema)
 
-        # LLM answers 'reason' instead of expected 'leave_type'
-        # The orchestrator should still try to store it
+        # During extraction, LLM extracts reason (skipping leave_type)
         llm = SequenceLLM([{
-            "intent": "answer",
-            "field_id": "reason",
-            "value": "Family vacation",
+            "intent": "multi_answer",
+            "answers": {"reason": "Family vacation"},
             "message": "Reason stored.",
         }])
 
@@ -290,15 +340,14 @@ class TestWrongField:
         assert state.get_answer("reason") == "Family vacation"
 
     @pytest.mark.asyncio
-    async def test_answer_for_nonexistent_field(self):
-        """LLM references a field that doesn't exist in the schema."""
+    async def test_answer_for_nonexistent_field_in_extraction(self):
+        """LLM references a field that doesn't exist — rejected during bulk set."""
         schema = _load_leave_schema()
         state = FormStateManager(schema)
 
         llm = SequenceLLM([{
-            "intent": "answer",
-            "field_id": "nonexistent_field",
-            "value": "something",
+            "intent": "multi_answer",
+            "answers": {"nonexistent_field": "something", "leave_type": "Annual"},
             "message": "Stored.",
         }])
 
@@ -306,8 +355,9 @@ class TestWrongField:
         orch.get_initial_action()
 
         action = await orch.process_user_message("something")
-        # Should handle gracefully — re-ask or return message
-        assert "action" in action
+        # leave_type should still be stored, nonexistent rejected
+        assert state.get_answer("leave_type") == "Annual"
+        assert state.get_answer("nonexistent_field") is None
 
 
 # --- LLM exceptions ---
@@ -317,8 +367,8 @@ class TestLLMExceptions:
     """LLM raises exceptions (timeout, network error, etc)."""
 
     @pytest.mark.asyncio
-    async def test_llm_exception_returns_fallback(self):
-        """When LLM throws, the orchestrator should return a fallback message."""
+    async def test_llm_exception_during_extraction_returns_fallback(self):
+        """When LLM throws during extraction, should fall back to first field."""
         schema = _load_leave_schema()
         state = FormStateManager(schema)
         llm = ExceptionLLM("Connection timeout")
@@ -328,8 +378,9 @@ class TestLLMExceptions:
 
         action = await orch.process_user_message("Hello")
         assert "action" in action
-        # Should be a MESSAGE or re-ask of the current field
-        assert action["action"] in ("MESSAGE", "ASK_DROPDOWN")
+        # Should fall back to asking the first field
+        assert action["action"] == "ASK_DROPDOWN"
+        assert action["field_id"] == "leave_type"
 
     @pytest.mark.asyncio
     async def test_llm_exception_does_not_corrupt_state(self):
@@ -356,17 +407,16 @@ class TestRetryMechanism:
     """Retry logic when first LLM call returns bad JSON."""
 
     @pytest.mark.asyncio
-    async def test_bad_json_then_good_json_succeeds(self):
-        """First call returns garbage, retry returns valid JSON."""
+    async def test_bad_json_then_good_json_succeeds_in_extraction(self):
+        """First extraction call returns garbage, retry returns valid JSON."""
         schema = _load_leave_schema()
         state = FormStateManager(schema)
 
         llm = FailThenSucceedLLM(
             failures=["not json"],
             success={
-                "intent": "answer",
-                "field_id": "leave_type",
-                "value": "Annual",
+                "intent": "multi_answer",
+                "answers": {"leave_type": "Annual"},
                 "message": "Annual leave.",
             },
         )
@@ -380,14 +430,14 @@ class TestRetryMechanism:
         assert llm.call_count == 2
 
     @pytest.mark.asyncio
-    async def test_all_retries_exhausted(self):
-        """All retries fail — should still return a valid action (fallback)."""
+    async def test_all_retries_exhausted_during_extraction(self):
+        """All extraction retries fail — should fall back to first field."""
         schema = _load_leave_schema()
         state = FormStateManager(schema)
 
         llm = FailThenSucceedLLM(
             failures=["bad1", "bad2", "bad3"],  # More failures than max retries
-            success={"intent": "answer", "field_id": "leave_type", "value": "X",
+            success={"intent": "multi_answer", "answers": {"leave_type": "X"},
                      "message": "X"},
         )
 
@@ -395,7 +445,8 @@ class TestRetryMechanism:
         orch.get_initial_action()
 
         action = await orch.process_user_message("Something")
-        # Should still return a valid action structure
+        # Should still return a valid action structure (first field)
         assert "action" in action
+        assert action["action"] == "ASK_DROPDOWN"
         # No answer should be stored (all attempts failed)
         assert state.get_answer("leave_type") is None

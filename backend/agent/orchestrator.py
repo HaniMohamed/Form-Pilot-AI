@@ -20,10 +20,11 @@ from typing import Any
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from backend.agent.prompts import build_system_prompt, build_user_message
+from backend.agent.prompts import build_extraction_prompt, build_system_prompt, build_user_message
 from backend.core.actions import (
     build_action_for_field,
     build_completion_payload,
+    build_extraction_summary_action,
     build_message_action,
 )
 from backend.core.form_state import AnswerValidationError, FormStateManager
@@ -48,6 +49,10 @@ class FormOrchestrator:
     Coordinates between the LLM, form state manager, and action protocol
     to guide the user through form completion one field at a time.
 
+    Supports a two-phase flow:
+    1. Greeting + bulk extraction: user provides free-text, LLM extracts all possible values
+    2. Follow-up: ask for remaining missing fields one at a time
+
     Args:
         state_manager: An initialized FormStateManager with the form schema.
         llm: A LangChain BaseChatModel instance.
@@ -56,24 +61,30 @@ class FormOrchestrator:
     def __init__(self, state_manager: FormStateManager, llm: BaseChatModel):
         self.state = state_manager
         self.llm = llm
+        # Tracks whether the initial bulk extraction has been processed
+        self._initial_extraction_done: bool = False
 
     def get_initial_action(self) -> dict:
-        """Get the first action to send to the UI (greeting + first question).
+        """Get the first action to send to the UI.
+
+        Returns a greeting MESSAGE asking the user to describe all their
+        form data in one go (instead of immediately asking for the first field).
 
         Returns:
-            An action dict (ASK_* for the first field, or FORM_COMPLETE if empty).
+            A MESSAGE action dict with the greeting.
         """
         if self.state.is_complete():
             return build_completion_payload(self.state.get_visible_answers())
 
-        next_field = self.state.get_next_field()
-        action = build_action_for_field(next_field)
-
-        # Add a greeting message
-        action["message"] = f"Hello! Let's fill out this form. {next_field.prompt}"
+        greeting = (
+            "Hello! I'm FormPilot AI, your form-filling assistant. "
+            "Please describe all the information you'd like to fill in, "
+            "and I'll take care of the rest. You can tell me everything at once!"
+        )
+        action = build_message_action(greeting)
 
         # Record in conversation history
-        self.state.add_message("assistant", action["message"])
+        self.state.add_message("assistant", greeting)
 
         return action
 
@@ -81,6 +92,7 @@ class FormOrchestrator:
         """Process a user message and return the next action.
 
         This is the main entry point for each conversation turn.
+        Routes to extraction phase or one-at-a-time phase based on state.
 
         Args:
             user_message: The raw text message from the user.
@@ -95,6 +107,53 @@ class FormOrchestrator:
         if self.state.is_complete():
             return self._handle_form_complete()
 
+        # Phase 1: Bulk extraction (first user message)
+        if not self._initial_extraction_done:
+            return await self._process_extraction(user_message)
+
+        # Phase 2: One-at-a-time follow-up
+        return await self._process_one_at_a_time(user_message)
+
+    async def _process_extraction(self, user_message: str) -> dict:
+        """Process the user's initial free-text and extract field values in bulk.
+
+        Args:
+            user_message: The user's free-text description.
+
+        Returns:
+            An action dict (summary + next missing field, or FORM_COMPLETE).
+        """
+        # Mark extraction as done regardless of outcome
+        self._initial_extraction_done = True
+
+        # Call LLM with the extraction prompt
+        llm_response = await self._call_extraction_llm(user_message)
+
+        if llm_response is None:
+            # LLM failed — fall back to one-at-a-time from the start
+            next_field = self.state.get_next_field()
+            if next_field is None:
+                return self._handle_form_complete()
+            action = build_action_for_field(next_field)
+            action["message"] = (
+                "I had trouble processing your description. "
+                f"Let's go through the form step by step. {next_field.prompt}"
+            )
+            self.state.add_message("assistant", action["message"])
+            return action
+
+        # Handle the multi_answer response
+        return self._handle_multi_answer(llm_response)
+
+    async def _process_one_at_a_time(self, user_message: str) -> dict:
+        """Process a user message in the one-at-a-time follow-up phase.
+
+        Args:
+            user_message: The user's message.
+
+        Returns:
+            An action dict for the UI.
+        """
         # Get current context
         next_field = self.state.get_next_field()
         if next_field is None:
@@ -104,7 +163,6 @@ class FormOrchestrator:
         llm_response = await self._call_llm(user_message)
 
         if llm_response is None:
-            # LLM failed after retries — return a fallback message
             return self._build_response_with_action(
                 build_message_action(
                     "I'm sorry, I had trouble understanding. Could you try again?"
@@ -128,8 +186,97 @@ class FormOrchestrator:
             loop.close()
 
     # -----------------------------------------------------------------
+    # Multi-answer handling (bulk extraction)
+    # -----------------------------------------------------------------
+
+    def _handle_multi_answer(self, llm_response: dict) -> dict:
+        """Handle a multi_answer intent from bulk extraction.
+
+        Validates and stores each extracted answer, then returns a summary
+        action with the next missing field (or FORM_COMPLETE).
+
+        Args:
+            llm_response: Parsed JSON from the LLM with multi_answer intent.
+
+        Returns:
+            An action dict for the UI.
+        """
+        answers = llm_response.get("answers", {})
+        llm_message = llm_response.get("message", "")
+
+        if not isinstance(answers, dict):
+            # LLM returned bad format — fall back
+            next_field = self.state.get_next_field()
+            if next_field is None:
+                return self._handle_form_complete()
+            action = build_action_for_field(next_field)
+            action["message"] = f"Let me ask you about each field. {next_field.prompt}"
+            self.state.add_message("assistant", action["message"])
+            return action
+
+        # Bulk-set the answers
+        accepted, rejected = self.state.set_answers_bulk(answers)
+
+        # Determine next action
+        next_field = self.state.get_next_field()
+        visible_answers = self.state.get_visible_answers() if next_field is None else None
+
+        action = build_extraction_summary_action(
+            accepted=accepted,
+            rejected=rejected,
+            next_field=next_field,
+            visible_answers=visible_answers,
+            llm_message=llm_message,
+        )
+
+        # Record in conversation history
+        msg = action.get("message") or action.get("text", "")
+        if msg:
+            self.state.add_message("assistant", msg)
+
+        return action
+
+    # -----------------------------------------------------------------
     # LLM interaction
     # -----------------------------------------------------------------
+
+    async def _call_extraction_llm(self, user_message: str) -> dict | None:
+        """Call the LLM with the extraction prompt and parse its response.
+
+        Args:
+            user_message: The user's free-text description.
+
+        Returns:
+            Parsed JSON dict with multi_answer intent, or None if fails.
+        """
+        extraction_prompt = build_extraction_prompt(self.state.schema)
+
+        messages = [
+            SystemMessage(content=extraction_prompt),
+            HumanMessage(content=user_message),
+        ]
+
+        for attempt in range(MAX_JSON_RETRIES + 1):
+            try:
+                response = await self.llm.ainvoke(messages)
+                content = response.content.strip()
+                parsed = self._extract_json(content)
+                if parsed is not None:
+                    return parsed
+
+                logger.warning(
+                    "Extraction LLM returned invalid JSON (attempt %d): %s",
+                    attempt + 1,
+                    content[:200],
+                )
+                messages.append(HumanMessage(content=JSON_RETRY_PROMPT))
+
+            except Exception as e:
+                logger.error("Extraction LLM call failed (attempt %d): %s", attempt + 1, e)
+                if attempt == MAX_JSON_RETRIES:
+                    return None
+
+        return None
 
     async def _call_llm(self, user_message: str) -> dict | None:
         """Call the LLM and parse its JSON response, with retries.

@@ -5,8 +5,10 @@ GenAI-powered conversational form filling system. An AI agent guides users throu
 ## Overview
 
 FormPilot AI helps users fill complex forms through natural conversation. The AI:
-- Asks one field at a time, in order
-- Never assumes or fabricates values
+- Greets the user and asks them to describe all their form data at once
+- Extracts all possible field values from the free-text description (bulk extraction)
+- Only asks about remaining missing fields one at a time
+- Never assumes or fabricates values — only extracts what the user explicitly stated
 - Follows deterministic visibility rules (not LLM-decided)
 - Returns structured JSON actions to the UI
 - Produces a final JSON payload for review and submission
@@ -91,20 +93,38 @@ flutter run -d chrome
 python -m pytest backend/tests/ -v
 ```
 
-**259 tests** across 8 test modules:
+**285 tests** across 9 test modules:
 
 | Module | Count | Coverage |
 |--------|-------|----------|
 | `test_schema.py` | 34 | Schema validation, field types, visibility references |
 | `test_visibility.py` | 56 | All 7 condition operators, AND logic, date comparisons |
-| `test_form_state.py` | 49 | State management, answer CRUD, cascading visibility |
+| `test_form_state.py` | 55 | State management, answer CRUD, cascading visibility, bulk answers |
 | `test_actions.py` | 25 | Action builders, model serialization |
-| `test_orchestrator.py` | 20 | Orchestrator with mock LLM, intent routing |
+| `test_orchestrator.py` | 27 | Orchestrator with mock LLM, two-phase flow, multi_answer intent |
 | `test_api.py` | 21 | API endpoint integration, session store |
-| `test_e2e.py` | 12 | Full multi-turn conversation flows |
+| `test_e2e.py` | 13 | Full multi-turn conversation flows with extraction |
 | `test_boundary.py` | 24 | Edge cases: 50+ fields, nested deps, date boundaries |
-| `test_llm_resilience.py` | 11 | Malformed JSON, retries, LLM exceptions |
+| `test_llm_resilience.py` | 15 | Malformed JSON, retries, LLM exceptions (extraction + one-at-a-time) |
 | `test_api_e2e.py` | 7 | Multi-turn HTTP API conversations |
+| `test_bulk_extraction.py` | 9 | Bulk extraction scenarios: complete, partial, gibberish, conditional |
+
+## Conversation Flow
+
+FormPilot AI uses a **two-phase conversation flow**:
+
+**Phase 1 — Bulk Extraction:**
+1. AI greets the user with a MESSAGE action
+2. User provides a free-text description of all their form data
+3. LLM extracts all possible field values in one pass (`multi_answer` intent)
+4. Valid answers are stored; invalid values are silently skipped
+
+**Phase 2 — One-at-a-Time Follow-Up:**
+5. For remaining missing required fields, AI asks one field at a time (ASK_* actions)
+6. User answers each field individually
+7. Repeat until all required fields are complete → FORM_COMPLETE
+
+This approach minimizes back-and-forth by capturing as much data as possible from the initial message, then only asking about what's still missing.
 
 ## Supported LLM Providers
 
