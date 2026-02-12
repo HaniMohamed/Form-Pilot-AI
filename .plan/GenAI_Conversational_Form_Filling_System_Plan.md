@@ -32,7 +32,7 @@ returning a final JSON payload for user review and submission
 
 ### LLM
 
--   watsonx / OpenAI / Azure OpenAI
+-   watsonx / OpenAI / Azure OpenAI / Custom OpenAI-compatible (e.g. GOSI Brain)
 -   Used only for reasoning and structured output
 -   No tool calling, no API access
 

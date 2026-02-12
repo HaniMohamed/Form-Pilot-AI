@@ -186,6 +186,7 @@
     - `openai` → `ChatOpenAI`
     - `azure_openai` → `AzureChatOpenAI`
     - `watsonx` → `WatsonxLLM` from `langchain_ibm`
+    - `custom` → `ChatOpenAI` with custom `base_url` (OpenAI-compatible endpoints like GOSI Brain)
   - [ ] Load credentials from environment variables
   - [ ] Set sensible defaults: `temperature=0`, `max_tokens=1024`
 - [ ] **5.2** Design the system prompt
