@@ -101,12 +101,45 @@ The `custom` provider supports any LLM endpoint that follows the OpenAI Chat Com
 
 Forms are defined as JSON schemas. The schema is the single source of truth for all field definitions, validation rules, and visibility conditions. See `backend/schemas/` for examples.
 
+### Supported Field Types
+
+| Type | Description | Requires `options` |
+|------|-------------|-------------------|
+| `dropdown` | Single-select dropdown | Yes |
+| `checkbox` | Multi-select checkboxes | Yes |
+| `text` | Free text input | No |
+| `date` | Date picker (ISO 8601) | No |
+| `datetime` | Date + time picker | No |
+| `location` | Lat/lng location picker | No |
+
+### Visibility Conditions
+
+Fields can be conditionally visible based on other fields' values. Conditions use `visible_if` with AND logic (`all` list). Supported operators:
+
+| Operator | Description |
+|----------|-------------|
+| `EXISTS` | Field has a value |
+| `EQUALS` | Field equals a static `value` or another field's value (`value_field`) |
+| `NOT_EQUALS` | Field does not equal the comparison |
+| `AFTER` | Date is after the comparison date |
+| `BEFORE` | Date is before the comparison date |
+| `ON_OR_AFTER` | Date is on or after the comparison |
+| `ON_OR_BEFORE` | Date is on or before the comparison |
+
+### Validation
+
+Schema validation is handled by Pydantic models in `backend/core/schema.py`. The validator enforces:
+- Field IDs must be unique
+- `visible_if` conditions must reference existing fields
+- `dropdown`/`checkbox` fields must have `options`
+- Fields cannot reference themselves in visibility conditions
+
 ## Development Status
 
 | Phase | Description | Status |
 |-------|-------------|--------|
 | 0 | Project Setup & Environment | Done |
-| 1 | Form Schema Definition & Validation | Pending |
+| 1 | Form Schema Definition & Validation | Done |
 | 2 | Deterministic Visibility Evaluator | Pending |
 | 3 | Form State Manager | Pending |
 | 4 | AI Action Protocol | Pending |
