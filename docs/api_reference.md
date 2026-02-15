@@ -15,9 +15,8 @@ uvicorn backend.api.app:app --reload
 | Method | Path | Description |
 |--------|------|-------------|
 | POST | `/api/chat` | Process a user message in a form-filling conversation |
-| POST | `/api/validate-schema` | Validate a form schema JSON |
-| GET | `/api/schemas` | List available example schemas |
-| GET | `/api/schemas/{filename}` | Get a specific example schema |
+| GET | `/api/schemas` | List available example form definitions (markdown) |
+| GET | `/api/schemas/{filename}` | Get a specific form definition markdown |
 | POST | `/api/sessions/reset` | Reset/delete a conversation session |
 | GET | `/api/health` | Health check |
 
@@ -29,43 +28,49 @@ Process a user message in a form-filling conversation. Creates a new session on 
 
 ### Conversation Flow
 
-1. **First call** — Send empty `user_message` with the schema. Returns a greeting MESSAGE.
+1. **First call** — Send empty `user_message` with the form markdown. Returns a greeting MESSAGE.
 2. **Second call** — User provides a free-text description. AI extracts all possible field values (bulk extraction).
-3. **Subsequent calls** — AI asks for remaining missing fields one at a time until FORM_COMPLETE.
+3. **Subsequent calls** — AI asks for remaining missing fields one at a time, possibly issuing TOOL_CALL actions.
+4. **Tool results** — If AI returns a TOOL_CALL, the frontend executes the tool and sends back `tool_results`.
+5. **Completion** — Once all required fields are collected, AI returns FORM_COMPLETE.
 
 ### Request
 
 ```json
 {
-  "form_schema": {
-    "form_id": "leave_request",
-    "fields": [...]
-  },
-  "user_message": "I want annual leave starting March 1st",
-  "conversation_id": "optional-uuid-string"
+  "form_context_md": "# Report Injury\n\n## Fields\n- injury_date (date): ...",
+  "user_message": "I got injured at work yesterday",
+  "conversation_id": "optional-uuid-string",
+  "tool_results": [
+    {
+      "tool_name": "get_establishments",
+      "result": { "establishments": [...] }
+    }
+  ]
 }
 ```
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `form_schema` | object | Yes | The form schema JSON (see [Schema Guide](schema_guide.md)) |
+| `form_context_md` | string | Yes | The form definition as markdown content |
 | `user_message` | string | Yes | The user's message (empty string for initial greeting) |
 | `conversation_id` | string | No | Session ID to resume. Auto-generated if omitted. |
+| `tool_results` | array | No | Results from tool calls requested by the AI |
 
 ### Response
 
 ```json
 {
   "action": {
-    "action": "ASK_DATE",
-    "field_id": "end_date",
-    "label": "When does your leave end?",
-    "message": "I captured your leave type and start date. When does your leave end?"
+    "action": "ASK_DROPDOWN",
+    "field_id": "establishment",
+    "label": "Which establishment?",
+    "options": ["Riyadh Technology Co.", "Jeddah Manufacturing Ltd."],
+    "message": "Please select your establishment."
   },
   "conversation_id": "abc-123-def",
   "answers": {
-    "leave_type": "Annual",
-    "start_date": "2026-03-01"
+    "injury_date": "2026-01-15"
   }
 }
 ```
@@ -74,13 +79,49 @@ Process a user message in a form-filling conversation. Creates a new session on 
 |-------|------|-------------|
 | `action` | object | The AI's response action (see [Action Protocol](action_protocol.md)) |
 | `conversation_id` | string | Session ID for subsequent calls |
-| `answers` | object | All currently visible answers |
+| `answers` | object | All currently collected answers |
+
+### Tool Call Response
+
+When the AI needs data from the frontend (e.g. dropdown options from an API):
+
+```json
+{
+  "action": {
+    "action": "TOOL_CALL",
+    "tool_name": "get_establishments",
+    "tool_args": {},
+    "message": "Looking up your establishments..."
+  },
+  "conversation_id": "abc-123-def",
+  "answers": {}
+}
+```
+
+The frontend should execute the tool and send the results back:
+
+```json
+{
+  "form_context_md": "...",
+  "user_message": "",
+  "conversation_id": "abc-123-def",
+  "tool_results": [
+    {
+      "tool_name": "get_establishments",
+      "result": {
+        "establishments": [
+          {"registrationNo": "5001234567", "name": {"english": "Riyadh Technology Co."}}
+        ]
+      }
+    }
+  ]
+}
+```
 
 ### Error Responses
 
 | Status | Condition |
 |--------|-----------|
-| 400 | Invalid form schema |
 | 422 | Missing required request fields |
 | 500 | Server configuration error or LLM failure |
 
@@ -91,7 +132,7 @@ Process a user message in a form-filling conversation. Creates a new session on 
 curl -X POST http://localhost:8000/api/chat \
   -H "Content-Type: application/json" \
   -d '{
-    "form_schema": {"form_id": "leave_request", "fields": [...]},
+    "form_context_md": "# Leave Request\n\n## Fields\n...",
     "user_message": ""
   }'
 # Returns: {"action": {"action": "MESSAGE", "text": "Hello! ..."}, ...}
@@ -100,7 +141,7 @@ curl -X POST http://localhost:8000/api/chat \
 curl -X POST http://localhost:8000/api/chat \
   -H "Content-Type: application/json" \
   -d '{
-    "form_schema": {"form_id": "leave_request", "fields": [...]},
+    "form_context_md": "# Leave Request\n\n## Fields\n...",
     "user_message": "Annual leave from March 1st to March 10th for vacation",
     "conversation_id": "abc-123"
   }'
@@ -109,47 +150,9 @@ curl -X POST http://localhost:8000/api/chat \
 
 ---
 
-## POST /api/validate-schema
-
-Validate a form schema JSON structure without starting a conversation.
-
-### Request
-
-```json
-{
-  "form_schema": {
-    "form_id": "my_form",
-    "fields": [...]
-  }
-}
-```
-
-### Response
-
-```json
-{
-  "valid": true,
-  "errors": []
-}
-```
-
-Or on failure:
-
-```json
-{
-  "valid": false,
-  "errors": [
-    "fields → 1 → id: Duplicate field ID 'name'",
-    "fields → 2 → visible_if → all → 0 → field: References non-existent field 'xyz'"
-  ]
-}
-```
-
----
-
 ## GET /api/schemas
 
-List available example schema files from `backend/schemas/`.
+List available example form definition files from `backend/schemas/`.
 
 ### Response
 
@@ -157,14 +160,14 @@ List available example schema files from `backend/schemas/`.
 {
   "schemas": [
     {
-      "filename": "incident_report.json",
-      "form_id": "incident_report",
-      "field_count": 5
+      "filename": "form_pilot_report_injury.md",
+      "title": "Report Occupational Injury",
+      "size": 4532
     },
     {
-      "filename": "leave_request.json",
-      "form_id": "leave_request",
-      "field_count": 7
+      "filename": "leave_request.md",
+      "title": "Leave Request",
+      "size": 2100
     }
   ]
 }
@@ -174,23 +177,28 @@ List available example schema files from `backend/schemas/`.
 
 ## GET /api/schemas/{filename}
 
-Get the full content of a specific example schema.
+Get the full content of a specific form definition.
 
 ### Parameters
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `filename` | string (path) | Schema filename (e.g., `leave_request.json`) |
+| `filename` | string (path) | Form definition filename (e.g., `form_pilot_report_injury.md`) |
 
 ### Response
 
-Returns the raw JSON schema object.
+```json
+{
+  "filename": "form_pilot_report_injury.md",
+  "content": "# Report Occupational Injury\n\n## Fields\n..."
+}
+```
 
 ### Error Responses
 
 | Status | Condition |
 |--------|-----------|
-| 404 | Schema file not found |
+| 404 | File not found |
 
 ---
 

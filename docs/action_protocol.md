@@ -13,6 +13,7 @@ FormPilot AI communicates with the Flutter web app through structured JSON actio
 | `ASK_DATE` | Render a date picker | Asking for a date field |
 | `ASK_DATETIME` | Render a date+time picker | Asking for a datetime field |
 | `ASK_LOCATION` | Render a location picker | Asking for a location field |
+| `TOOL_CALL` | Request the frontend to execute a tool | AI needs external data (e.g. API lookup) |
 | `FORM_COMPLETE` | Display final data summary | All required fields filled |
 
 ## Action JSON Formats
@@ -176,6 +177,43 @@ Asks the user to provide a geographic location.
 - `lat` must be between -90 and 90
 - `lng` must be between -180 and 180
 
+### TOOL_CALL
+
+Requests the frontend to execute a tool (e.g. data lookup, API call). The frontend should execute the tool and send the results back in the next `/api/chat` request via `tool_results`.
+
+```json
+{
+  "action": "TOOL_CALL",
+  "tool_name": "get_establishments",
+  "tool_args": {},
+  "message": "Looking up your establishments..."
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `action` | `"TOOL_CALL"` | Action type identifier |
+| `tool_name` | string | Name of the tool to execute |
+| `tool_args` | object | Arguments to pass to the tool (may be empty) |
+| `message` | string | Status message to display while executing |
+
+**Expected response:** The frontend sends `tool_results` in the next request:
+
+```json
+{
+  "tool_results": [
+    {
+      "tool_name": "get_establishments",
+      "result": {
+        "establishments": [
+          {"registrationNo": "5001234567", "name": {"english": "Riyadh Technology Co."}}
+        ]
+      }
+    }
+  ]
+}
+```
+
 ### FORM_COMPLETE
 
 Signals that all required visible fields have been answered. Contains the final collected data.
@@ -222,7 +260,8 @@ User opens form
          │  (if missing fields)
          ▼
 ┌─────────────────┐
-│  ASK_*          │  ← One field at a time
+│  ASK_* /        │  ← One field at a time
+│  TOOL_CALL      │     AI may request tool execution for data lookups
 │  (field by      │
 │   field)        │
 └────────┬────────┘

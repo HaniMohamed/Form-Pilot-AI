@@ -187,6 +187,10 @@ class DynamicWidgetPanel extends StatelessWidget {
           action: action!,
           colorScheme: colorScheme,
         ),
+      ActionType.toolCall => _MessageWidget(
+          action: action!,
+          colorScheme: colorScheme,
+        ),
     };
   }
 }

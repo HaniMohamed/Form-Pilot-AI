@@ -1,6 +1,6 @@
 /// Service for communicating with the FormPilot AI backend.
 ///
-/// Handles HTTP calls to /api/chat, /api/validate-schema, /api/schemas,
+/// Handles HTTP calls to /api/chat, /api/schemas,
 /// and /api/sessions/reset endpoints.
 library;
 
@@ -9,7 +9,6 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 
 import '../models/ai_action.dart';
-import '../models/form_schema.dart';
 
 /// Exception thrown when the backend returns an error.
 class ChatServiceException implements Exception {
@@ -34,38 +33,25 @@ class ChatService {
 
   /// Send a chat message and get the AI response.
   ///
-  /// [schema] is the form schema (sent on every request so the backend can
-  /// create a session if needed).
+  /// [formContextMd] is the markdown form context sent on every request.
   /// [userMessage] is the user's text input.
   /// [conversationId] is the session ID (null for first message).
+  /// [toolResults] is the results from TOOL_CALL actions (null if none).
   Future<ChatResponse> sendMessage({
-    required FormSchema schema,
+    required String formContextMd,
     required String userMessage,
     String? conversationId,
+    List<Map<String, dynamic>>? toolResults,
   }) async {
     final body = {
-      'form_schema': schema.toJson(),
+      'form_context_md': formContextMd,
       'user_message': userMessage,
-      if (conversationId != null) 'conversation_id': conversationId,
+      'conversation_id': ?conversationId,
+      'tool_results': ?toolResults,
     };
 
     final response = await _post('/chat', body);
     return ChatResponse.fromJson(response);
-  }
-
-  /// Validate a form schema against the backend.
-  Future<({bool valid, List<String> errors})> validateSchema(
-    FormSchema schema,
-  ) async {
-    final response = await _post('/validate-schema', {
-      'form_schema': schema.toJson(),
-    });
-    return (
-      valid: response['valid'] as bool,
-      errors: (response['errors'] as List<dynamic>)
-          .map((e) => e.toString())
-          .toList(),
-    );
   }
 
   /// List available example schemas from the backend.
@@ -76,10 +62,15 @@ class ChatService {
         .toList();
   }
 
-  /// Get a specific example schema by filename.
-  Future<FormSchema> getSchema(String filename) async {
+  /// Get a specific schema file content by filename.
+  Future<({String filename, String content})> getSchemaContent(
+    String filename,
+  ) async {
     final response = await _get('/schemas/$filename');
-    return FormSchema.fromJson(response);
+    return (
+      filename: response['filename'] as String,
+      content: response['content'] as String,
+    );
   }
 
   /// Reset/delete a conversation session.
@@ -109,7 +100,7 @@ class ChatService {
             headers: {'Content-Type': 'application/json'},
             body: jsonEncode(body),
           )
-          .timeout(const Duration(seconds: 30));
+          .timeout(const Duration(seconds: 60));
 
       return _handleResponse(response);
     } on http.ClientException catch (e) {

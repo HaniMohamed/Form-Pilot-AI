@@ -1,6 +1,6 @@
 # FormPilot AI
 
-GenAI-powered conversational form filling system. An AI agent guides users through complex forms via chat, following structured schemas and deterministic business logic.
+GenAI-powered conversational form filling system. An AI agent guides users through complex forms via natural chat, interpreting markdown form definitions and returning structured UI actions.
 
 ## Overview
 
@@ -8,8 +8,8 @@ FormPilot AI helps users fill complex forms through natural conversation. The AI
 - Greets the user and asks them to describe all their form data at once
 - Extracts all possible field values from the free-text description (bulk extraction)
 - Only asks about remaining missing fields one at a time
+- Supports tool calls — the AI can request data lookups (e.g. employee lists, injury types) from the frontend
 - Never assumes or fabricates values — only extracts what the user explicitly stated
-- Follows deterministic visibility rules (not LLM-decided)
 - Returns structured JSON actions to the UI
 - Produces a final JSON payload for review and submission
 
@@ -21,38 +21,57 @@ FormPilot AI helps users fill complex forms through natural conversation. The AI
 │  (Simulation & Test) │◀────│  (FastAPI)            │◀────│  (API)  │
 └──────────────────────┘     └──────────────────────┘     └─────────┘
         │                            │
-   Chat Panel              Schema Validation
-   Widget Rendering        Visibility Evaluator
-   JSON Debug Panel        Form State Manager
-                           Conversation Orchestrator
+   Chat Panel              Markdown Form Interpretation
+   Inline Action Widgets   Conversation Orchestrator
+   Mock Tool Execution     System Prompt Builder
+   JSON Debug Panel        LLM Resilience Layer
 ```
 
 ### Components
 
 | Component | Purpose |
 |-----------|---------|
-| **Flutter Web App** | Simulation UI with chat, dynamic widgets, and debug panel |
-| **Python Backend** | LangChain agent, form state, visibility evaluation, API |
-| **LLM** | Reasoning and structured output only (no tool calling, no API access) |
+| **Flutter Web App** | Simulation UI with chat, inline action widgets, mock tool execution, and debug panel |
+| **Python Backend** | LangChain agent, markdown-driven orchestrator, API |
+| **LLM** | Reasoning, form interpretation, and structured output (no direct tool calling, no API access) |
+
+### Form Definition: Markdown-Driven
+
+Forms are defined as **markdown documents** (`.md` files). The LLM interprets the markdown directly to understand fields, rules, validation, and available tool calls. This replaces the previous JSON schema approach, giving maximum flexibility.
+
+Example markdown forms are in `backend/schemas/`. The markdown includes:
+- Field definitions with types and constraints
+- Validation rules and dependencies
+- Tool call definitions (e.g. `get_establishments`, `get_injury_types`)
+- Business rules and conditional logic
+
+### Tool Call Round-Trip
+
+The AI can request tool calls from the frontend (e.g. to fetch dropdown options from an API). The flow is:
+
+1. AI returns a `TOOL_CALL` action with `tool_name` and `tool_args`
+2. Frontend executes the tool (real API call or mock in demo)
+3. Frontend sends `tool_results` back to the AI in the next request
+4. AI uses the results to continue the conversation
 
 ## Project Structure
 
 ```
 form_pilot_ai/
 ├── backend/                  # Python backend
-│   ├── core/                 # Core logic (schema, visibility, state)
-│   ├── agent/                # LangChain agent and orchestrator
+│   ├── core/                 # Core logic (actions, sessions)
+│   ├── agent/                # LangChain agent, orchestrator, prompts
 │   ├── api/                  # FastAPI routes
-│   ├── schemas/              # Example form schema JSON files
+│   ├── schemas/              # Example form definition markdown files
 │   └── tests/                # Unit and integration tests
 ├── flutter_web/              # Flutter web app (simulation & testing)
 │   └── lib/
-│       ├── models/           # Dart data models (FormSchema, AIAction)
-│       ├── screens/          # Simulation screen (three-panel layout)
-│       ├── services/         # ChatService (backend HTTP communication)
-│       └── widgets/          # Chat panel, dynamic widgets, debug panel
+│       ├── models/           # Dart data models (AIAction, ChatResponse)
+│       ├── screens/          # Simulation screen (two-panel layout)
+│       ├── services/         # ChatService, MockTools
+│       └── widgets/          # Chat panel, dynamic widgets, debug panel, schema selector
 ├── docs/                     # Project documentation
-│   ├── schema_guide.md       # How to write a form schema
+│   ├── schema_guide.md       # How to write a form definition
 │   ├── api_reference.md      # Backend API endpoints and contracts
 │   └── action_protocol.md    # AI action types and JSON formats
 ├── Dockerfile                # Backend Docker image
@@ -67,7 +86,7 @@ form_pilot_ai/
 
 - Python 3.12+
 - Flutter SDK (web enabled)
-- An LLM API key (OpenAI, Azure OpenAI, or watsonx)
+- An LLM API key (OpenAI, Azure OpenAI, watsonx, or any OpenAI-compatible endpoint)
 
 ### Backend
 
@@ -99,27 +118,27 @@ flutter run -d chrome
 python -m pytest backend/tests/ -v
 ```
 
-**285 tests** across 9 test modules:
+**242 tests** across 11 test modules:
 
 | Module | Count | Coverage |
 |--------|-------|----------|
 | `test_schema.py` | 34 | Schema validation, field types, visibility references |
 | `test_visibility.py` | 56 | All 7 condition operators, AND logic, date comparisons |
 | `test_form_state.py` | 55 | State management, answer CRUD, cascading visibility, bulk answers |
-| `test_actions.py` | 25 | Action builders, model serialization |
-| `test_orchestrator.py` | 27 | Orchestrator with mock LLM, two-phase flow, multi_answer intent |
-| `test_api.py` | 21 | API endpoint integration, session store |
-| `test_e2e.py` | 13 | Full multi-turn conversation flows with extraction |
+| `test_actions.py` | 6 | Action builders (message, completion, tool call) |
+| `test_orchestrator.py` | 16 | Orchestrator with mock LLM, two-phase flow, tool calls |
+| `test_api.py` | 13 | API endpoint integration, session store |
+| `test_e2e.py` | 10 | Full multi-turn conversation flows with extraction and tool calls |
 | `test_boundary.py` | 24 | Edge cases: 50+ fields, nested deps, date boundaries |
-| `test_llm_resilience.py` | 15 | Malformed JSON, retries, LLM exceptions (extraction + one-at-a-time) |
-| `test_api_e2e.py` | 7 | Multi-turn HTTP API conversations |
-| `test_bulk_extraction.py` | 9 | Bulk extraction scenarios: complete, partial, gibberish, conditional |
+| `test_llm_resilience.py` | 11 | Malformed JSON, retries, LLM exceptions |
+| `test_api_e2e.py` | 8 | Multi-turn HTTP API conversations with tool call round-trips |
+| `test_bulk_extraction.py` | 5 | Bulk extraction scenarios: complete, partial, gibberish |
 
 ## Documentation
 
 | Document | Description |
 |----------|-------------|
-| [Schema Guide](docs/schema_guide.md) | How to write a form schema |
+| [Schema Guide](docs/schema_guide.md) | How to write a form definition (markdown) |
 | [API Reference](docs/api_reference.md) | Backend API endpoints and contracts |
 | [Action Protocol](docs/action_protocol.md) | AI action types and JSON formats |
 
@@ -134,11 +153,26 @@ FormPilot AI uses a **two-phase conversation flow**:
 4. Valid answers are stored; invalid values are silently skipped
 
 **Phase 2 — One-at-a-Time Follow-Up:**
-5. For remaining missing required fields, AI asks one field at a time (ASK_* actions)
-6. User answers each field individually
-7. Repeat until all required fields are complete → FORM_COMPLETE
+5. For remaining missing fields, AI asks one field at a time (ASK_* actions)
+6. AI may issue TOOL_CALL actions to fetch data (e.g. dropdown options)
+7. User answers each field individually
+8. Repeat until all required fields are complete -> FORM_COMPLETE
 
 This approach minimizes back-and-forth by capturing as much data as possible from the initial message, then only asking about what's still missing.
+
+## Action Types
+
+| Action | Description |
+|--------|-------------|
+| `MESSAGE` | Plain text message to the user |
+| `ASK_TEXT` | Request free text input |
+| `ASK_DROPDOWN` | Request selection from a list of options |
+| `ASK_CHECKBOX` | Request multi-select from a list of options |
+| `ASK_DATE` | Request a date value |
+| `ASK_DATETIME` | Request a date and time value |
+| `ASK_LOCATION` | Request a geographic location |
+| `TOOL_CALL` | Request frontend to execute a tool (e.g. data lookup) |
+| `FORM_COMPLETE` | All fields collected; final data payload for review |
 
 ## Supported LLM Providers
 
@@ -151,44 +185,12 @@ This approach minimizes back-and-forth by capturing as much data as possible fro
 
 ### Custom Provider
 
-The `custom` provider supports any LLM endpoint that follows the OpenAI Chat Completions API format. This includes company-hosted platforms like **GOSI Brain**. Set `LLM_PROVIDER=custom` and configure the endpoint, API key, and model name. Under the hood, it uses LangChain's `ChatOpenAI` with a custom `base_url`.
+The `custom` provider supports any LLM endpoint that follows the OpenAI Chat Completions API format. This includes:
+- Company-hosted platforms like **GOSI Brain**
+- Local models via **Ollama** (e.g. `http://localhost:11434/v1/chat/completions`)
+- Any OpenAI-compatible endpoint
 
-## Form Schema
-
-Forms are defined as JSON schemas. The schema is the single source of truth for all field definitions, validation rules, and visibility conditions. See `backend/schemas/` for examples.
-
-### Supported Field Types
-
-| Type | Description | Requires `options` |
-|------|-------------|-------------------|
-| `dropdown` | Single-select dropdown | Yes |
-| `checkbox` | Multi-select checkboxes | Yes |
-| `text` | Free text input | No |
-| `date` | Date picker (ISO 8601) | No |
-| `datetime` | Date + time picker | No |
-| `location` | Lat/lng location picker | No |
-
-### Visibility Conditions
-
-Fields can be conditionally visible based on other fields' values. Conditions use `visible_if` with AND logic (`all` list). Supported operators:
-
-| Operator | Description |
-|----------|-------------|
-| `EXISTS` | Field has a value |
-| `EQUALS` | Field equals a static `value` or another field's value (`value_field`) |
-| `NOT_EQUALS` | Field does not equal the comparison |
-| `AFTER` | Date is after the comparison date |
-| `BEFORE` | Date is before the comparison date |
-| `ON_OR_AFTER` | Date is on or after the comparison |
-| `ON_OR_BEFORE` | Date is on or before the comparison |
-
-### Validation
-
-Schema validation is handled by Pydantic models in `backend/core/schema.py`. The validator enforces:
-- Field IDs must be unique
-- `visible_if` conditions must reference existing fields
-- `dropdown`/`checkbox` fields must have `options`
-- Fields cannot reference themselves in visibility conditions
+Set `LLM_PROVIDER=custom` and configure the endpoint, API key, and model name. Under the hood, it uses LangChain's `ChatOpenAI` with a custom `base_url`.
 
 ## API Endpoints
 
@@ -201,9 +203,8 @@ uvicorn backend.api.app:app --reload
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | POST | `/api/chat` | Process a user message in a form-filling conversation |
-| POST | `/api/validate-schema` | Validate a form schema JSON |
-| GET | `/api/schemas` | List available example schemas |
-| GET | `/api/schemas/{filename}` | Get a specific example schema |
+| GET | `/api/schemas` | List available example form definitions (markdown) |
+| GET | `/api/schemas/{filename}` | Get a specific form definition markdown content |
 | POST | `/api/sessions/reset` | Reset/delete a conversation session |
 | GET | `/api/health` | Health check |
 
@@ -212,44 +213,36 @@ uvicorn backend.api.app:app --reload
 ```json
 // Request
 {
-  "form_schema": { "form_id": "...", "fields": [...] },
-  "user_message": "I want annual leave",
-  "conversation_id": "optional-uuid"
+  "form_context_md": "# Report Injury\n\n## Fields\n...",
+  "user_message": "I got injured at work yesterday",
+  "conversation_id": "optional-uuid",
+  "tool_results": [{"tool_name": "get_establishments", "result": {...}}]
 }
 
 // Response
 {
-  "action": { "action": "ASK_DATE", "field_id": "start_date", ... },
+  "action": { "action": "ASK_DROPDOWN", "field_id": "establishment", ... },
   "conversation_id": "uuid",
-  "answers": { "leave_type": "Annual" }
+  "answers": { "injury_date": "2025-01-15" }
 }
-```
-
-### POST /api/validate-schema
-
-```json
-// Request
-{ "form_schema": { "form_id": "...", "fields": [...] } }
-
-// Response
-{ "valid": true, "errors": [] }
 ```
 
 ## Flutter Web App
 
-The Flutter web app provides a three-panel simulation interface:
+The Flutter web app provides a two-panel simulation interface:
 
 | Panel | Purpose |
 |-------|---------|
-| **Chat Panel** (left) | Conversational message list with text input |
-| **Widget Panel** (center) | Renders dynamic UI widgets from AI actions (dropdowns, date pickers, checkboxes, etc.) |
-| **Debug Panel** (right) | Real-time view of answers, last action JSON, and field visibility status |
+| **Chat Panel** (left) | Conversational messages with inline action widgets (dropdowns, date pickers, etc.) |
+| **Debug Panel** (right) | Real-time view of answers, last action JSON, and session info |
 
 Features:
-- Schema selector — choose from example schemas or paste custom JSON
+- Form selector — choose from example markdown forms or paste custom markdown
+- Inline action widgets — dropdowns, date pickers, checkboxes rendered directly in chat
+- Mock tool execution — simulates backend tool calls with realistic test data
 - Backend health indicator — shows connection status
 - Responsive layout — tabs on narrow screens, side-by-side on wide screens
-- Reset conversation, view raw schema JSON
+- Reset conversation, view raw form markdown
 
 ## Docker
 
@@ -287,3 +280,4 @@ docker run -p 8000:8000 --env-file .env formpilot-ai
 | 7 | Flutter Web App (Simulation & Testing) | Done |
 | 8 | Testing & Quality Assurance | Done |
 | 9 | Documentation & Deployment | Done |
+| 10 | Markdown-Driven Architecture | Done |

@@ -140,7 +140,7 @@ class _ChatPanelState extends State<ChatPanel> {
   bool get _shouldShowInlineWidget {
     final action = widget.currentAction;
     if (action == null || widget.isLoading) return false;
-    // Show inline widgets for field-specific actions (not MESSAGE or FORM_COMPLETE)
+    // Show inline widgets for field-specific actions (not MESSAGE, FORM_COMPLETE, or TOOL_CALL)
     return action.isFieldAction && action.type != ActionType.askText;
   }
 
@@ -298,6 +298,11 @@ class _ChatPanelState extends State<ChatPanel> {
       return _buildFormCompleteCard(message, colorScheme);
     }
 
+    // Check if this is a tool-call status message
+    if (!isUser && message.isToolCall) {
+      return _buildToolCallBubble(message, colorScheme);
+    }
+
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
       child: Row(
@@ -354,6 +359,67 @@ class _ChatPanelState extends State<ChatPanel> {
               ),
             ),
           ],
+        ],
+      ),
+    );
+  }
+
+  /// Renders a TOOL_CALL status message with a distinct style.
+  Widget _buildToolCallBubble(ChatMessage message, ColorScheme colorScheme) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          CircleAvatar(
+            radius: 14,
+            backgroundColor: Colors.blue.shade100,
+            child: Icon(
+              Icons.build_circle,
+              size: 16,
+              color: Colors.blue.shade700,
+            ),
+          ),
+          const SizedBox(width: 8),
+          Flexible(
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              decoration: BoxDecoration(
+                color: Colors.blue.shade50,
+                borderRadius: const BorderRadius.only(
+                  topLeft: Radius.circular(16),
+                  topRight: Radius.circular(16),
+                  bottomRight: Radius.circular(16),
+                  bottomLeft: Radius.circular(4),
+                ),
+                border: Border.all(color: Colors.blue.shade200),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  SizedBox(
+                    width: 14,
+                    height: 14,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2,
+                      color: Colors.blue.shade600,
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Flexible(
+                    child: Text(
+                      message.text,
+                      style: TextStyle(
+                        color: Colors.blue.shade900,
+                        fontSize: 13,
+                        fontStyle: FontStyle.italic,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
         ],
       ),
     );

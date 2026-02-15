@@ -1,23 +1,24 @@
-/// Schema selector widget — dropdown to pick an example schema or upload custom JSON.
+/// Schema selector widget — dropdown to pick a markdown form context or paste custom markdown.
 library;
-
-import 'dart:convert';
 
 import 'package:flutter/material.dart';
 
-import '../models/form_schema.dart';
 import '../services/chat_service.dart';
+
+/// Callback type for when a markdown form context is selected.
+/// Receives the filename and markdown content.
+typedef OnMarkdownSelected = void Function(String filename, String content);
 
 /// Schema selector as a popup menu button in the app bar.
 class SchemaSelector extends StatefulWidget {
   final ChatService chatService;
-  final ValueChanged<FormSchema> onSchemaSelected;
+  final OnMarkdownSelected onMarkdownSelected;
   final bool isBackendConnected;
 
   const SchemaSelector({
     super.key,
     required this.chatService,
-    required this.onSchemaSelected,
+    required this.onMarkdownSelected,
     required this.isBackendConnected,
   });
 
@@ -50,8 +51,8 @@ class _SchemaSelectorState extends State<SchemaSelector> {
 
   Future<void> _selectSchema(String filename) async {
     try {
-      final schema = await widget.chatService.getSchema(filename);
-      widget.onSchemaSelected(schema);
+      final result = await widget.chatService.getSchemaContent(filename);
+      widget.onMarkdownSelected(result.filename, result.content);
     } on ChatServiceException catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -61,13 +62,13 @@ class _SchemaSelectorState extends State<SchemaSelector> {
     }
   }
 
-  void _showCustomSchemaDialog() {
+  void _showCustomMarkdownDialog() {
     final controller = TextEditingController();
 
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Paste Custom Schema JSON'),
+        title: const Text('Paste Custom Markdown'),
         content: SizedBox(
           width: 600,
           height: 400,
@@ -76,7 +77,7 @@ class _SchemaSelectorState extends State<SchemaSelector> {
             maxLines: null,
             expands: true,
             decoration: const InputDecoration(
-              hintText: '{\n  "form_id": "...",\n  "fields": [...]\n}',
+              hintText: '# My Form\n\n## Step 1\n...',
               border: OutlineInputBorder(),
             ),
             style: const TextStyle(fontFamily: 'monospace', fontSize: 13),
@@ -89,18 +90,17 @@ class _SchemaSelectorState extends State<SchemaSelector> {
           ),
           FilledButton(
             onPressed: () {
-              try {
-                final json = jsonDecode(controller.text) as Map<String, dynamic>;
-                final schema = FormSchema.fromJson(json);
-                Navigator.of(ctx).pop();
-                widget.onSchemaSelected(schema);
-              } catch (e) {
+              final content = controller.text.trim();
+              if (content.isEmpty) {
                 ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text('Invalid schema: $e')),
+                  const SnackBar(content: Text('Markdown content is empty')),
                 );
+                return;
               }
+              Navigator.of(ctx).pop();
+              widget.onMarkdownSelected('custom.md', content);
             },
-            child: const Text('Load Schema'),
+            child: const Text('Load Markdown'),
           ),
         ],
       ),
@@ -115,7 +115,7 @@ class _SchemaSelectorState extends State<SchemaSelector> {
         children: [
           const Icon(Icons.folder_open),
           const SizedBox(width: 4),
-          const Text('Schema'),
+          const Text('Forms'),
           if (_loading) ...[
             const SizedBox(width: 4),
             const SizedBox(
@@ -126,12 +126,12 @@ class _SchemaSelectorState extends State<SchemaSelector> {
           ],
         ],
       ),
-      tooltip: 'Select Form Schema',
+      tooltip: 'Select Form Definition',
       enabled: widget.isBackendConnected,
       onOpened: _loadSchemas,
       onSelected: (value) {
         if (value == '__custom__') {
-          _showCustomSchemaDialog();
+          _showCustomMarkdownDialog();
         } else {
           _selectSchema(value);
         }
@@ -146,8 +146,8 @@ class _SchemaSelectorState extends State<SchemaSelector> {
               value: schema['filename'] as String,
               child: ListTile(
                 leading: const Icon(Icons.description, size: 20),
-                title: Text(schema['form_id'] as String? ?? schema['filename'] as String),
-                subtitle: Text('${schema['field_count']} fields'),
+                title: Text(schema['title'] as String? ?? schema['filename'] as String),
+                subtitle: Text(schema['filename'] as String),
                 dense: true,
                 contentPadding: EdgeInsets.zero,
               ),
@@ -159,12 +159,12 @@ class _SchemaSelectorState extends State<SchemaSelector> {
           items.add(const PopupMenuDivider());
         }
 
-        // Custom schema option
+        // Custom markdown option
         items.add(const PopupMenuItem(
           value: '__custom__',
           child: ListTile(
-            leading: Icon(Icons.code, size: 20),
-            title: Text('Custom JSON...'),
+            leading: Icon(Icons.edit_note, size: 20),
+            title: Text('Custom Markdown...'),
             dense: true,
             contentPadding: EdgeInsets.zero,
           ),

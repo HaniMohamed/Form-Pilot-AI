@@ -1,4 +1,4 @@
-/// Debug panel — shows current answers, last action JSON, and field visibility.
+/// Debug panel — shows current answers, last action JSON, and session info.
 ///
 /// Provides a real-time view of the conversation state for development
 /// and testing purposes.
@@ -9,18 +9,17 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 
 import '../models/ai_action.dart';
-import '../models/form_schema.dart';
 
 /// The debug panel showing current state in collapsible sections.
 class DebugPanel extends StatelessWidget {
-  final FormSchema? schema;
+  final String? formFilename;
   final Map<String, dynamic> answers;
   final AIAction? currentAction;
   final String? conversationId;
 
   const DebugPanel({
     super.key,
-    required this.schema,
+    required this.formFilename,
     required this.answers,
     required this.currentAction,
     required this.conversationId,
@@ -58,7 +57,7 @@ class DebugPanel extends StatelessWidget {
 
         // Content
         Expanded(
-          child: schema == null
+          child: formFilename == null
               ? _buildEmptyState(colorScheme)
               : ListView(
                   padding: const EdgeInsets.all(8),
@@ -68,8 +67,6 @@ class DebugPanel extends StatelessWidget {
                     _buildAnswersSection(colorScheme),
                     const SizedBox(height: 4),
                     _buildLastActionSection(colorScheme),
-                    const SizedBox(height: 4),
-                    _buildFieldVisibilitySection(colorScheme),
                   ],
                 ),
         ),
@@ -101,9 +98,8 @@ class DebugPanel extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _kvRow('Form ID', schema?.formId ?? '-'),
+          _kvRow('Form', formFilename ?? '-'),
           _kvRow('Conversation ID', conversationId ?? '-'),
-          _kvRow('Fields', '${schema?.fields.length ?? 0}'),
           _kvRow('Answers', '${answers.length}'),
         ],
       ),
@@ -147,69 +143,6 @@ class DebugPanel extends StatelessWidget {
               ),
             )
           : _JsonView(data: currentAction!.toJson()),
-    );
-  }
-
-  Widget _buildFieldVisibilitySection(ColorScheme colorScheme) {
-    if (schema == null) return const SizedBox.shrink();
-
-    return _DebugSection(
-      title: 'Field Status',
-      icon: Icons.visibility_outlined,
-      initiallyExpanded: false,
-      child: Column(
-        children: schema!.fields.map((field) {
-          final hasAnswer = answers.containsKey(field.id);
-          final isConditional = field.visibleIf != null;
-
-          return Padding(
-            padding: const EdgeInsets.symmetric(vertical: 2),
-            child: Row(
-              children: [
-                Icon(
-                  hasAnswer
-                      ? Icons.check_circle
-                      : isConditional
-                          ? Icons.visibility_off
-                          : Icons.radio_button_unchecked,
-                  size: 14,
-                  color: hasAnswer
-                      ? Colors.green
-                      : isConditional
-                          ? Colors.orange
-                          : Colors.grey,
-                ),
-                const SizedBox(width: 6),
-                Expanded(
-                  child: Text(
-                    field.id,
-                    style: TextStyle(
-                      fontFamily: 'monospace',
-                      fontSize: 12,
-                      color: hasAnswer ? Colors.green.shade700 : null,
-                      fontWeight: hasAnswer ? FontWeight.bold : null,
-                    ),
-                  ),
-                ),
-                Text(
-                  field.type.name,
-                  style: const TextStyle(
-                    fontSize: 11,
-                    color: Colors.grey,
-                  ),
-                ),
-                if (field.required) ...[
-                  const SizedBox(width: 4),
-                  const Text(
-                    '*',
-                    style: TextStyle(color: Colors.red, fontSize: 12),
-                  ),
-                ],
-              ],
-            ),
-          );
-        }).toList(),
-      ),
     );
   }
 

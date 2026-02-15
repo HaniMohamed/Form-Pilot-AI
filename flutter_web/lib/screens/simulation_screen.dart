@@ -1,15 +1,13 @@
 /// Main simulation screen with two-panel layout:
 /// 1. Chat panel (left) — messages, inline action widgets, and text input
-/// 2. JSON debug panel (right) — current answers, last action, field visibility
+/// 2. JSON debug panel (right) — current answers, last action
 library;
-
-import 'dart:convert';
 
 import 'package:flutter/material.dart';
 
 import '../models/ai_action.dart';
-import '../models/form_schema.dart';
 import '../services/chat_service.dart';
+import '../services/mock_tools.dart';
 import '../widgets/chat_panel.dart';
 import '../widgets/debug_panel.dart';
 import '../widgets/schema_selector.dart';
@@ -20,6 +18,9 @@ class ChatMessage {
   final bool isUser;
   final DateTime timestamp;
 
+  /// If true, this message represents a tool call executing in the background.
+  final bool isToolCall;
+
   /// If non-null, this message represents a FORM_COMPLETE result.
   /// The chat panel renders it as a rich card with the final data.
   final Map<String, dynamic>? formCompleteData;
@@ -28,6 +29,7 @@ class ChatMessage {
     required this.text,
     required this.isUser,
     required this.timestamp,
+    this.isToolCall = false,
     this.formCompleteData,
   });
 }
@@ -44,7 +46,8 @@ class _SimulationScreenState extends State<SimulationScreen> {
   final ChatService _chatService = ChatService();
 
   // Session state
-  FormSchema? _schema;
+  String? _formContextMd;
+  String? _formFilename;
   String? _conversationId;
   AIAction? _currentAction;
   Map<String, dynamic> _answers = {};
@@ -74,10 +77,11 @@ class _SimulationScreenState extends State<SimulationScreen> {
     }
   }
 
-  /// Load a schema and start a new conversation session.
-  Future<void> _onSchemaSelected(FormSchema schema) async {
+  /// Load a markdown form and start a new conversation session.
+  Future<void> _onMarkdownSelected(String filename, String content) async {
     setState(() {
-      _schema = schema;
+      _formContextMd = content;
+      _formFilename = filename;
       _conversationId = null;
       _currentAction = null;
       _answers = {};
@@ -86,9 +90,9 @@ class _SimulationScreenState extends State<SimulationScreen> {
     });
 
     try {
-      // Send empty message to initialize the session
+      // Send empty message to initialize the session and get greeting
       final response = await _chatService.sendMessage(
-        schema: schema,
+        formContextMd: content,
         userMessage: '',
       );
 
@@ -100,7 +104,7 @@ class _SimulationScreenState extends State<SimulationScreen> {
       });
 
       // Add the AI greeting to the chat
-      final greeting = response.action.message ?? response.action.label ?? '';
+      final greeting = response.action.message ?? response.action.text ?? '';
       if (greeting.isNotEmpty) {
         setState(() {
           _messages.add(ChatMessage(
@@ -124,7 +128,7 @@ class _SimulationScreenState extends State<SimulationScreen> {
 
   /// Process a user message through the chat service.
   Future<void> _onUserMessage(String message) async {
-    if (_schema == null || message.trim().isEmpty) return;
+    if (_formContextMd == null || message.trim().isEmpty) return;
 
     // Add user message to chat
     setState(() {
@@ -136,11 +140,23 @@ class _SimulationScreenState extends State<SimulationScreen> {
       _isLoading = true;
     });
 
+    await _sendToBackend(userMessage: message);
+  }
+
+  /// Send a message (or tool results) to the backend and handle the response.
+  ///
+  /// Automatically handles TOOL_CALL responses by executing mock tools
+  /// and sending results back.
+  Future<void> _sendToBackend({
+    String userMessage = '',
+    List<Map<String, dynamic>>? toolResults,
+  }) async {
     try {
       final response = await _chatService.sendMessage(
-        schema: _schema!,
-        userMessage: message,
+        formContextMd: _formContextMd!,
+        userMessage: userMessage,
         conversationId: _conversationId,
+        toolResults: toolResults,
       );
 
       setState(() {
@@ -150,7 +166,13 @@ class _SimulationScreenState extends State<SimulationScreen> {
         _isLoading = false;
       });
 
-      // For FORM_COMPLETE, add a rich card message with the final data
+      // Handle TOOL_CALL: execute mock tool and send results back
+      if (response.action.isToolCall) {
+        await _handleToolCall(response.action);
+        return;
+      }
+
+      // Handle FORM_COMPLETE: show rich card
       if (response.action.isFormComplete) {
         final summaryText =
             response.action.message ?? response.action.text ?? '';
@@ -162,21 +184,22 @@ class _SimulationScreenState extends State<SimulationScreen> {
             formCompleteData: response.action.data,
           ));
         });
-      } else {
-        // Add AI response message to chat
-        final aiMessage = response.action.message ??
-            response.action.text ??
-            response.action.label ??
-            '';
-        if (aiMessage.isNotEmpty) {
-          setState(() {
-            _messages.add(ChatMessage(
-              text: aiMessage,
-              isUser: false,
-              timestamp: DateTime.now(),
-            ));
-          });
-        }
+        return;
+      }
+
+      // Handle regular actions: add AI message to chat
+      final aiMessage = response.action.message ??
+          response.action.text ??
+          response.action.label ??
+          '';
+      if (aiMessage.isNotEmpty) {
+        setState(() {
+          _messages.add(ChatMessage(
+            text: aiMessage,
+            isUser: false,
+            timestamp: DateTime.now(),
+          ));
+        });
       }
     } on ChatServiceException catch (e) {
       setState(() {
@@ -190,6 +213,42 @@ class _SimulationScreenState extends State<SimulationScreen> {
     }
   }
 
+  /// Handle a TOOL_CALL action: show a status message, execute the mock tool,
+  /// and send the result back to the backend.
+  Future<void> _handleToolCall(AIAction action) async {
+    final toolName = action.toolName ?? 'unknown';
+    final toolArgs = action.toolArgs ?? {};
+    final toolMessage = action.message ?? 'Executing $toolName...';
+
+    // Show a tool-executing message in chat
+    setState(() {
+      _messages.add(ChatMessage(
+        text: toolMessage,
+        isUser: false,
+        timestamp: DateTime.now(),
+        isToolCall: true,
+      ));
+      _isLoading = true;
+    });
+
+    // Small delay to simulate network/processing time
+    await Future<void>.delayed(const Duration(milliseconds: 500));
+
+    // Execute the mock tool
+    final mockResult = executeMockTool(toolName, toolArgs);
+
+    // Send the tool result back to the backend
+    await _sendToBackend(
+      toolResults: [
+        {
+          'tool_name': toolName,
+          'tool_args': toolArgs,
+          'result': mockResult,
+        },
+      ],
+    );
+  }
+
   /// Reset the current conversation.
   Future<void> _onReset() async {
     if (_conversationId != null) {
@@ -200,23 +259,23 @@ class _SimulationScreenState extends State<SimulationScreen> {
       }
     }
 
-    if (_schema != null) {
-      await _onSchemaSelected(_schema!);
+    if (_formContextMd != null && _formFilename != null) {
+      await _onMarkdownSelected(_formFilename!, _formContextMd!);
     }
   }
 
-  /// Show the raw schema JSON in a dialog.
-  void _showSchemaDialog() {
-    if (_schema == null) return;
+  /// Show the markdown content in a dialog.
+  void _showMarkdownDialog() {
+    if (_formContextMd == null) return;
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Form Schema'),
+        title: Text('Form Definition: ${_formFilename ?? ""}'),
         content: SizedBox(
           width: 600,
           child: SingleChildScrollView(
             child: SelectableText(
-              const JsonEncoder.withIndent('  ').convert(_schema!.toJson()),
+              _formContextMd!,
               style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
             ),
           ),
@@ -274,14 +333,14 @@ class _SimulationScreenState extends State<SimulationScreen> {
         actions: [
           SchemaSelector(
             chatService: _chatService,
-            onSchemaSelected: _onSchemaSelected,
+            onMarkdownSelected: _onMarkdownSelected,
             isBackendConnected: _isBackendConnected,
           ),
-          if (_schema != null) ...[
+          if (_formContextMd != null) ...[
             IconButton(
               icon: const Icon(Icons.description_outlined),
-              tooltip: 'Show Schema',
-              onPressed: _showSchemaDialog,
+              tooltip: 'Show Form Definition',
+              onPressed: _showMarkdownDialog,
             ),
             IconButton(
               icon: const Icon(Icons.refresh),
@@ -297,7 +356,7 @@ class _SimulationScreenState extends State<SimulationScreen> {
           const SizedBox(width: 8),
         ],
       ),
-      body: _schema == null ? _buildWelcome() : _buildTwoPanelLayout(),
+      body: _formContextMd == null ? _buildWelcome() : _buildTwoPanelLayout(),
     );
   }
 
@@ -354,7 +413,7 @@ class _SimulationScreenState extends State<SimulationScreen> {
             const SizedBox(height: 24),
           ],
           const Text(
-            'Select a form schema from the toolbar to begin',
+            'Select a form definition from the toolbar to begin',
             style: TextStyle(fontSize: 16, color: Colors.grey),
           ),
         ],
@@ -394,7 +453,7 @@ class _SimulationScreenState extends State<SimulationScreen> {
         Expanded(
           flex: 2,
           child: DebugPanel(
-            schema: _schema,
+            formFilename: _formFilename,
             answers: _answers,
             currentAction: _currentAction,
             conversationId: _conversationId,
@@ -426,7 +485,7 @@ class _SimulationScreenState extends State<SimulationScreen> {
                   currentAction: _currentAction,
                 ),
                 DebugPanel(
-                  schema: _schema,
+                  formFilename: _formFilename,
                   answers: _answers,
                   currentAction: _currentAction,
                   conversationId: _conversationId,

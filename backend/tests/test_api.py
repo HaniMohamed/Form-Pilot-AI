@@ -2,11 +2,11 @@
 Integration tests for the FastAPI API layer.
 
 Tests cover:
-- POST /api/validate-schema with valid and invalid schemas
-- POST /api/chat full conversation flow (with mock LLM)
+- POST /api/chat with markdown form context
 - Session persistence across multiple /chat calls
+- Tool results pass-through
 - Error responses for malformed requests
-- GET /api/schemas listing
+- GET /api/schemas listing (.md files)
 - GET /api/schemas/{filename}
 - POST /api/sessions/reset
 - GET /api/health
@@ -17,12 +17,25 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from backend.api.routes import configure_routes, router
 from backend.core.session import SessionStore
 
 SCHEMAS_DIR = Path(__file__).parent.parent / "schemas"
+
+# Sample markdown form context for testing
+SAMPLE_MD = """
+# Leave Request Form
+
+## Fields
+- **leave_type** (dropdown, required): Type of leave?
+  Options: Annual, Sick, Emergency
+- **start_date** (date, required): Start date?
+- **end_date** (date, required): End date?
+- **reason** (text, required): Reason for leave?
+"""
 
 
 # --- Mock LLM for integration tests ---
@@ -38,7 +51,7 @@ class MockLLM:
     async def ainvoke(self, messages, **kwargs):
         self.call_count += 1
         if not self.responses:
-            # Default: return multi_answer extraction with one field
+            # Default: return extraction with one field
             response_dict = {
                 "intent": "multi_answer",
                 "answers": {"leave_type": "Annual"},
@@ -54,105 +67,14 @@ class MockLLM:
 # --- Fixtures ---
 
 
-def _load_leave_schema() -> dict:
-    """Load the leave_request schema as a dict."""
-    with open(SCHEMAS_DIR / "leave_request.json") as f:
-        return json.load(f)
-
-
 def _create_test_app(llm=None):
     """Create a FastAPI test client with a mock LLM."""
-    from fastapi import FastAPI
-
     app = FastAPI()
     session_store = SessionStore(timeout_seconds=3600)
     mock_llm = llm or MockLLM()
     configure_routes(session_store, mock_llm)
     app.include_router(router, prefix="/api")
     return TestClient(app), session_store, mock_llm
-
-
-# --- /api/validate-schema tests ---
-
-
-class TestValidateSchema:
-    """Tests for the POST /api/validate-schema endpoint."""
-
-    def test_valid_schema(self):
-        client, _, _ = _create_test_app()
-        schema = _load_leave_schema()
-        response = client.post("/api/validate-schema", json={"form_schema": schema})
-        assert response.status_code == 200
-        data = response.json()
-        assert data["valid"] is True
-        assert data["errors"] == []
-
-    def test_invalid_schema_missing_fields(self):
-        client, _, _ = _create_test_app()
-        response = client.post(
-            "/api/validate-schema",
-            json={"form_schema": {"form_id": "test"}},
-        )
-        assert response.status_code == 200
-        data = response.json()
-        assert data["valid"] is False
-        assert len(data["errors"]) > 0
-
-    def test_invalid_schema_duplicate_ids(self):
-        client, _, _ = _create_test_app()
-        schema = {
-            "form_id": "test",
-            "fields": [
-                {"id": "f1", "type": "text", "required": True, "prompt": "First"},
-                {"id": "f1", "type": "text", "required": True, "prompt": "Duplicate"},
-            ],
-        }
-        response = client.post("/api/validate-schema", json={"form_schema": schema})
-        assert response.status_code == 200
-        data = response.json()
-        assert data["valid"] is False
-        assert any("duplicate" in e.lower() or "unique" in e.lower() for e in data["errors"])
-
-    def test_invalid_schema_bad_visible_if_reference(self):
-        client, _, _ = _create_test_app()
-        schema = {
-            "form_id": "test",
-            "fields": [
-                {"id": "f1", "type": "text", "required": True, "prompt": "First"},
-                {
-                    "id": "f2",
-                    "type": "text",
-                    "required": True,
-                    "prompt": "Second",
-                    "visible_if": {
-                        "all": [{"field": "nonexistent", "operator": "EXISTS"}]
-                    },
-                },
-            ],
-        }
-        response = client.post("/api/validate-schema", json={"form_schema": schema})
-        assert response.status_code == 200
-        data = response.json()
-        assert data["valid"] is False
-
-    def test_validate_schema_empty_body(self):
-        client, _, _ = _create_test_app()
-        response = client.post("/api/validate-schema", json={})
-        # FastAPI returns 422 for missing required fields
-        assert response.status_code == 422
-
-    def test_invalid_field_type(self):
-        client, _, _ = _create_test_app()
-        schema = {
-            "form_id": "test",
-            "fields": [
-                {"id": "f1", "type": "invalid_type", "required": True, "prompt": "Bad type"},
-            ],
-        }
-        response = client.post("/api/validate-schema", json={"form_schema": schema})
-        assert response.status_code == 200
-        data = response.json()
-        assert data["valid"] is False
 
 
 # --- /api/chat tests ---
@@ -168,12 +90,15 @@ class TestChat:
             {"intent": "multi_answer",
              "answers": {"leave_type": "Annual"},
              "message": "Got it!"},
+            # Conversation response
+            {"action": "ASK_DATE", "field_id": "start_date",
+             "label": "Start date?",
+             "message": "I captured Annual leave. When does it start?"},
         ])
         client, store, _ = _create_test_app(mock_llm)
-        schema = _load_leave_schema()
 
         response = client.post("/api/chat", json={
-            "form_schema": schema,
+            "form_context_md": SAMPLE_MD,
             "user_message": "I want annual leave",
         })
 
@@ -182,24 +107,20 @@ class TestChat:
         assert "conversation_id" in data
         assert "action" in data
         assert "answers" in data
-        # Session should exist in the store
         assert store.count() == 1
 
     def test_empty_first_message_returns_initial_action(self):
-        """Empty first message should return the initial greeting MESSAGE action."""
+        """Empty first message should return the greeting MESSAGE action."""
         client, store, _ = _create_test_app()
-        schema = _load_leave_schema()
 
         response = client.post("/api/chat", json={
-            "form_schema": schema,
+            "form_context_md": SAMPLE_MD,
             "user_message": "",
         })
 
         assert response.status_code == 200
         data = response.json()
         assert "conversation_id" in data
-        assert "action" in data
-        # Initial action should be a greeting MESSAGE
         action = data["action"]
         assert action["action"] == "MESSAGE"
         assert "text" in action
@@ -211,42 +132,44 @@ class TestChat:
             {"intent": "multi_answer",
              "answers": {"leave_type": "Annual"},
              "message": "Annual leave captured."},
-            # Follow-up: start_date
-            {"intent": "answer", "field_id": "start_date", "value": "2026-03-01",
-             "message": "Start date set."},
+            # Conversation: ask start_date
+            {"action": "ASK_DATE", "field_id": "start_date",
+             "label": "Start date?",
+             "message": "When does it start?"},
+            # Follow-up: answer start_date
+            {"action": "ASK_DATE", "field_id": "end_date",
+             "label": "End date?",
+             "message": "And when does it end?"},
         ])
         client, store, _ = _create_test_app(mock_llm)
-        schema = _load_leave_schema()
 
         # First message — triggers extraction
         r1 = client.post("/api/chat", json={
-            "form_schema": schema,
+            "form_context_md": SAMPLE_MD,
             "user_message": "I want annual leave",
         })
         cid = r1.json()["conversation_id"]
         assert store.count() == 1
 
-        # Second message with same conversation_id — one-at-a-time
+        # Second message with same conversation_id
         r2 = client.post("/api/chat", json={
-            "form_schema": schema,
+            "form_context_md": SAMPLE_MD,
             "user_message": "Starting March 1st",
             "conversation_id": cid,
         })
         assert r2.status_code == 200
-        # Should still be 1 session (reused)
         assert store.count() == 1
 
-    def test_invalid_schema_returns_400(self):
-        """Chat with an invalid schema should return 400."""
+    def test_empty_markdown_returns_400(self):
+        """Chat with empty markdown should return 400."""
         client, _, _ = _create_test_app()
 
         response = client.post("/api/chat", json={
-            "form_schema": {"bad": "schema"},
+            "form_context_md": "",
             "user_message": "Hello",
         })
 
         assert response.status_code == 400
-        assert "Invalid form schema" in response.json()["detail"]
 
     def test_chat_missing_body_fields(self):
         """Chat with missing required fields should return 422."""
@@ -258,14 +181,16 @@ class TestChat:
     def test_custom_conversation_id(self):
         """Client can provide a custom conversation_id."""
         mock_llm = MockLLM([
-            {"intent": "multi_answer", "answers": {"leave_type": "Sick"}, "message": "Ok."},
+            {"intent": "multi_answer", "answers": {"leave_type": "Sick"},
+             "message": "Ok."},
+            {"action": "ASK_DATE", "field_id": "start_date",
+             "label": "Start date?", "message": "When?"},
         ])
         client, store, _ = _create_test_app(mock_llm)
-        schema = _load_leave_schema()
         custom_id = "my-custom-session-123"
 
         response = client.post("/api/chat", json={
-            "form_schema": schema,
+            "form_context_md": SAMPLE_MD,
             "user_message": "Sick leave",
             "conversation_id": custom_id,
         })
@@ -273,6 +198,36 @@ class TestChat:
         assert response.status_code == 200
         assert response.json()["conversation_id"] == custom_id
         assert store.get_session(custom_id) is not None
+
+    def test_tool_results_accepted(self):
+        """Chat endpoint accepts tool_results in the request."""
+        mock_llm = MockLLM([
+            # After tool results, LLM continues
+            {"action": "ASK_DROPDOWN", "field_id": "establishment",
+             "label": "Select establishment",
+             "options": ["Company A", "Company B"],
+             "message": "Please select."},
+        ])
+        client, store, _ = _create_test_app(mock_llm)
+
+        # First create a session
+        r0 = client.post("/api/chat", json={
+            "form_context_md": SAMPLE_MD,
+            "user_message": "",
+        })
+        cid = r0.json()["conversation_id"]
+
+        # Send tool results
+        response = client.post("/api/chat", json={
+            "form_context_md": SAMPLE_MD,
+            "user_message": "",
+            "conversation_id": cid,
+            "tool_results": [{
+                "tool_name": "get_establishments",
+                "result": {"establishments": ["Company A", "Company B"]},
+            }],
+        })
+        assert response.status_code == 200
 
 
 # --- /api/schemas tests ---
@@ -287,19 +242,26 @@ class TestSchemas:
         assert response.status_code == 200
         data = response.json()
         assert "schemas" in data
-        assert len(data["schemas"]) >= 2  # leave_request + incident_report
+        # Should find the .md file(s)
+        assert len(data["schemas"]) >= 1
 
     def test_get_specific_schema(self):
+        """Get a specific .md schema file."""
         client, _, _ = _create_test_app()
-        response = client.get("/api/schemas/leave_request.json")
-        assert response.status_code == 200
-        data = response.json()
-        assert data["form_id"] == "leave_request"
-        assert "fields" in data
+        # Get the first available schema
+        list_response = client.get("/api/schemas")
+        schemas = list_response.json()["schemas"]
+        if schemas:
+            filename = schemas[0]["filename"]
+            response = client.get(f"/api/schemas/{filename}")
+            assert response.status_code == 200
+            data = response.json()
+            assert "content" in data
+            assert "filename" in data
 
     def test_get_nonexistent_schema(self):
         client, _, _ = _create_test_app()
-        response = client.get("/api/schemas/nonexistent.json")
+        response = client.get("/api/schemas/nonexistent.md")
         assert response.status_code == 404
 
 
@@ -310,16 +272,12 @@ class TestSessionReset:
     """Tests for the POST /api/sessions/reset endpoint."""
 
     def test_reset_existing_session(self):
-        mock_llm = MockLLM([
-            {"intent": "multi_answer", "answers": {"leave_type": "Annual"}, "message": "Ok"},
-        ])
-        client, store, _ = _create_test_app(mock_llm)
-        schema = _load_leave_schema()
+        client, store, _ = _create_test_app()
 
         # Create a session
         r = client.post("/api/chat", json={
-            "form_schema": schema,
-            "user_message": "Annual leave",
+            "form_context_md": SAMPLE_MD,
+            "user_message": "",
         })
         cid = r.json()["conversation_id"]
         assert store.count() == 1
@@ -360,27 +318,22 @@ class TestSessionStore:
 
     def test_session_expiry(self):
         """Expired sessions should not be returned."""
-        from backend.core.schema import FormSchema
         from backend.core.session import SessionStore
 
-        store = SessionStore(timeout_seconds=0)  # Immediate expiry
-        schema = FormSchema(**_load_leave_schema())
-        cid, session = store.create_session(schema, MockLLM())
+        store = SessionStore(timeout_seconds=0)
+        cid, session = store.create_session(SAMPLE_MD, MockLLM())
 
-        # Session should immediately be expired
         import time
         time.sleep(0.01)
         assert store.get_session(cid) is None
 
     def test_cleanup_expired(self):
-        from backend.core.schema import FormSchema
         from backend.core.session import SessionStore
 
         store = SessionStore(timeout_seconds=0)
-        schema = FormSchema(**_load_leave_schema())
 
-        store.create_session(schema, MockLLM())
-        store.create_session(schema, MockLLM())
+        store.create_session(SAMPLE_MD, MockLLM())
+        store.create_session(SAMPLE_MD, MockLLM())
 
         import time
         time.sleep(0.01)
@@ -389,14 +342,12 @@ class TestSessionStore:
         assert store.count() == 0
 
     def test_list_session_ids(self):
-        from backend.core.schema import FormSchema
         from backend.core.session import SessionStore
 
         store = SessionStore()
-        schema = FormSchema(**_load_leave_schema())
 
-        cid1, _ = store.create_session(schema, MockLLM())
-        cid2, _ = store.create_session(schema, MockLLM())
+        cid1, _ = store.create_session(SAMPLE_MD, MockLLM())
+        cid2, _ = store.create_session(SAMPLE_MD, MockLLM())
 
         ids = store.list_session_ids()
         assert cid1 in ids

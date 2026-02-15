@@ -3,21 +3,18 @@ FastAPI routes for the FormPilot AI backend.
 
 Endpoints:
 - POST /chat              — process a user message in a conversation
-- POST /validate-schema   — validate a form schema JSON
-- GET  /schemas           — list available example schemas
+- GET  /schemas           — list available example schemas (.md files)
+- GET  /schemas/{filename} — get a specific schema file content
 - POST /sessions/reset    — reset/delete a conversation session
 - GET  /health            — health check
 """
 
-import json
 import logging
 from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, ValidationError
-
-from backend.core.schema import FormSchema
+from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
@@ -46,9 +43,10 @@ def configure_routes(session_store, llm):
 class ChatRequest(BaseModel):
     """Request body for the /chat endpoint."""
 
-    form_schema: dict[str, Any]
+    form_context_md: str
     user_message: str
     conversation_id: str | None = None
+    tool_results: list[dict[str, Any]] | None = None
 
 
 class ChatResponse(BaseModel):
@@ -57,19 +55,6 @@ class ChatResponse(BaseModel):
     action: dict[str, Any]
     conversation_id: str
     answers: dict[str, Any]
-
-
-class ValidateSchemaRequest(BaseModel):
-    """Request body for the /validate-schema endpoint."""
-
-    form_schema: dict[str, Any]
-
-
-class ValidateSchemaResponse(BaseModel):
-    """Response body for the /validate-schema endpoint."""
-
-    valid: bool
-    errors: list[str]
 
 
 class ResetRequest(BaseModel):
@@ -86,10 +71,13 @@ async def chat(request: ChatRequest):
     """Process a user message in a form-filling conversation.
 
     If conversation_id is provided, resumes an existing session.
-    Otherwise, creates a new session from the provided schema.
+    Otherwise, creates a new session from the provided markdown context.
     """
     if _session_store is None or _llm is None:
         raise HTTPException(status_code=500, detail="Server not properly configured")
+
+    if not request.form_context_md.strip():
+        raise HTTPException(status_code=400, detail="form_context_md cannot be empty")
 
     # Try to resume existing session
     session = None
@@ -100,32 +88,27 @@ async def chat(request: ChatRequest):
 
     # Create new session if needed
     if session is None:
-        try:
-            schema = FormSchema(**request.form_schema)
-        except ValidationError as e:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Invalid form schema: {_format_validation_errors(e)}",
-            )
-
         conversation_id, session = _session_store.create_session(
-            schema=schema,
+            form_context_md=request.form_context_md,
             llm=_llm,
             conversation_id=conversation_id,
         )
 
         # If this is the first message and it's empty/greeting, return initial action
-        if not request.user_message.strip():
+        if not request.user_message.strip() and not request.tool_results:
             action = session.orchestrator.get_initial_action()
             return ChatResponse(
                 action=action,
                 conversation_id=conversation_id,
-                answers=session.state_manager.get_visible_answers(),
+                answers=session.orchestrator.get_answers(),
             )
 
-    # Process the user message
+    # Process the user message (with optional tool results)
     try:
-        action = await session.orchestrator.process_user_message(request.user_message)
+        action = await session.orchestrator.process_user_message(
+            user_message=request.user_message,
+            tool_results=request.tool_results,
+        )
     except Exception as e:
         logger.error("Error processing message: %s", e, exc_info=True)
         raise HTTPException(
@@ -136,55 +119,46 @@ async def chat(request: ChatRequest):
     return ChatResponse(
         action=action,
         conversation_id=conversation_id,
-        answers=session.state_manager.get_visible_answers(),
+        answers=session.orchestrator.get_answers(),
     )
-
-
-@router.post("/validate-schema", response_model=ValidateSchemaResponse)
-async def validate_schema(request: ValidateSchemaRequest):
-    """Validate a form schema JSON structure.
-
-    Returns whether the schema is valid and any validation errors.
-    """
-    try:
-        FormSchema(**request.form_schema)
-        return ValidateSchemaResponse(valid=True, errors=[])
-    except ValidationError as e:
-        errors = _format_validation_errors(e)
-        return ValidateSchemaResponse(valid=False, errors=errors)
 
 
 @router.get("/schemas")
 async def list_schemas():
-    """List available example schema files."""
+    """List available example schema files (.md and .json)."""
     schemas = []
     if SCHEMAS_DIR.exists():
-        for path in sorted(SCHEMAS_DIR.glob("*.json")):
+        for path in sorted(SCHEMAS_DIR.glob("*.md")):
             try:
-                with open(path) as f:
-                    data = json.load(f)
+                content = path.read_text()
+                # Extract title from first markdown heading
+                title = path.stem
+                for line in content.splitlines():
+                    if line.startswith("# "):
+                        title = line[2:].strip()
+                        break
                 schemas.append({
                     "filename": path.name,
-                    "form_id": data.get("form_id", path.stem),
-                    "field_count": len(data.get("fields", [])),
+                    "title": title,
+                    "size": len(content),
                 })
-            except (json.JSONDecodeError, OSError):
+            except OSError:
                 continue
     return {"schemas": schemas}
 
 
 @router.get("/schemas/{filename}")
 async def get_schema(filename: str):
-    """Get a specific example schema by filename."""
+    """Get a specific schema file content by filename."""
     path = SCHEMAS_DIR / filename
-    if not path.exists() or not path.suffix == ".json":
+    if not path.exists():
         raise HTTPException(status_code=404, detail=f"Schema '{filename}' not found")
 
     try:
-        with open(path) as f:
-            return json.load(f)
-    except json.JSONDecodeError:
-        raise HTTPException(status_code=500, detail=f"Invalid JSON in schema file '{filename}'")
+        content = path.read_text()
+        return {"filename": filename, "content": content}
+    except OSError:
+        raise HTTPException(status_code=500, detail=f"Error reading schema file '{filename}'")
 
 
 @router.post("/sessions/reset")
@@ -208,16 +182,3 @@ async def health_check():
         "status": "healthy",
         "active_sessions": session_count,
     }
-
-
-# --- Helpers ---
-
-
-def _format_validation_errors(e: ValidationError) -> list[str]:
-    """Format Pydantic validation errors into readable strings."""
-    errors = []
-    for err in e.errors():
-        loc = " → ".join(str(x) for x in err.get("loc", []))
-        msg = err.get("msg", "Unknown error")
-        errors.append(f"{loc}: {msg}" if loc else msg)
-    return errors

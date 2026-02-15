@@ -1,9 +1,9 @@
 """
 In-memory session store for conversation state.
 
-Each conversation session holds a FormStateManager and a FormOrchestrator.
-Sessions are created automatically on the first /chat call and can be
-cleaned up after a timeout.
+Each session holds the markdown form context, an orchestrator, conversation
+history, and a simple answer dict. Sessions are created on the first /chat
+call and cleaned up after a timeout.
 """
 
 import time
@@ -11,8 +11,6 @@ import uuid
 from typing import Any
 
 from backend.agent.orchestrator import FormOrchestrator
-from backend.core.form_state import FormStateManager
-from backend.core.schema import FormSchema
 
 
 # Default session timeout: 30 minutes
@@ -22,10 +20,9 @@ DEFAULT_SESSION_TIMEOUT_SECONDS = 30 * 60
 class Session:
     """A single conversation session."""
 
-    def __init__(self, schema: FormSchema, orchestrator: FormOrchestrator):
-        self.schema = schema
+    def __init__(self, form_context_md: str, orchestrator: FormOrchestrator):
+        self.form_context_md = form_context_md
         self.orchestrator = orchestrator
-        self.state_manager = orchestrator.state
         self.created_at: float = time.time()
         self.last_accessed_at: float = time.time()
 
@@ -51,14 +48,14 @@ class SessionStore:
 
     def create_session(
         self,
-        schema: FormSchema,
+        form_context_md: str,
         llm: Any,
         conversation_id: str | None = None,
     ) -> tuple[str, Session]:
-        """Create a new session for a form schema.
+        """Create a new session for a markdown form context.
 
         Args:
-            schema: A validated FormSchema.
+            form_context_md: The markdown content describing the form.
             llm: A LangChain BaseChatModel instance.
             conversation_id: Optional custom ID. Auto-generated if not provided.
 
@@ -68,9 +65,8 @@ class SessionStore:
         if conversation_id is None:
             conversation_id = str(uuid.uuid4())
 
-        state_manager = FormStateManager(schema)
-        orchestrator = FormOrchestrator(state_manager, llm)
-        session = Session(schema, orchestrator)
+        orchestrator = FormOrchestrator(form_context_md, llm)
+        session = Session(form_context_md, orchestrator)
 
         self._sessions[conversation_id] = session
         return conversation_id, session

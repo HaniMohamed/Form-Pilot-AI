@@ -12,6 +12,7 @@ enum ActionType {
   askDate('ASK_DATE'),
   askDatetime('ASK_DATETIME'),
   askLocation('ASK_LOCATION'),
+  toolCall('TOOL_CALL'),
   formComplete('FORM_COMPLETE'),
   message('MESSAGE');
 
@@ -66,15 +67,30 @@ class AIAction {
     return raw['data'] as Map<String, dynamic>?;
   }
 
+  /// The tool name (for TOOL_CALL actions).
+  String? get toolName => raw['tool_name'] as String?;
+
+  /// The tool arguments (for TOOL_CALL actions).
+  Map<String, dynamic>? get toolArgs {
+    final args = raw['tool_args'];
+    if (args is Map<String, dynamic>) return args;
+    return null;
+  }
+
   /// Whether this is an ASK_* action (field question).
   bool get isFieldAction =>
-      type != ActionType.formComplete && type != ActionType.message;
+      type != ActionType.formComplete &&
+      type != ActionType.message &&
+      type != ActionType.toolCall;
 
   /// Whether this is the form completion action.
   bool get isFormComplete => type == ActionType.formComplete;
 
   /// Whether this is a plain message action.
   bool get isMessage => type == ActionType.message;
+
+  /// Whether this is a tool call action.
+  bool get isToolCall => type == ActionType.toolCall;
 
   Map<String, dynamic> toJson() => raw;
 }
