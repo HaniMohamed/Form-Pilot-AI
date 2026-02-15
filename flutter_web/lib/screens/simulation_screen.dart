@@ -1,7 +1,6 @@
-/// Main simulation screen with three-panel layout:
-/// 1. Chat panel (left) — message list + text input
-/// 2. Dynamic widget panel (center) — rendered from AI actions
-/// 3. JSON debug panel (right) — current answers + last action
+/// Main simulation screen with two-panel layout:
+/// 1. Chat panel (left) — messages, inline action widgets, and text input
+/// 2. JSON debug panel (right) — current answers, last action, field visibility
 library;
 
 import 'dart:convert';
@@ -13,7 +12,6 @@ import '../models/form_schema.dart';
 import '../services/chat_service.dart';
 import '../widgets/chat_panel.dart';
 import '../widgets/debug_panel.dart';
-import '../widgets/dynamic_widget_panel.dart';
 import '../widgets/schema_selector.dart';
 
 /// Represents a single chat message in the conversation.
@@ -22,10 +20,15 @@ class ChatMessage {
   final bool isUser;
   final DateTime timestamp;
 
+  /// If non-null, this message represents a FORM_COMPLETE result.
+  /// The chat panel renders it as a rich card with the final data.
+  final Map<String, dynamic>? formCompleteData;
+
   const ChatMessage({
     required this.text,
     required this.isUser,
     required this.timestamp,
+    this.formCompleteData,
   });
 }
 
@@ -47,7 +50,6 @@ class _SimulationScreenState extends State<SimulationScreen> {
   Map<String, dynamic> _answers = {};
   List<ChatMessage> _messages = [];
   bool _isLoading = false;
-  String? _errorMessage;
   bool _isBackendConnected = false;
 
   @override
@@ -80,7 +82,6 @@ class _SimulationScreenState extends State<SimulationScreen> {
       _currentAction = null;
       _answers = {};
       _messages = [];
-      _errorMessage = null;
       _isLoading = true;
     });
 
@@ -111,8 +112,12 @@ class _SimulationScreenState extends State<SimulationScreen> {
       }
     } on ChatServiceException catch (e) {
       setState(() {
-        _errorMessage = e.message;
         _isLoading = false;
+        _messages.add(ChatMessage(
+          text: 'Error: ${e.message}',
+          isUser: false,
+          timestamp: DateTime.now(),
+        ));
       });
     }
   }
@@ -129,7 +134,6 @@ class _SimulationScreenState extends State<SimulationScreen> {
         timestamp: DateTime.now(),
       ));
       _isLoading = true;
-      _errorMessage = null;
     });
 
     try {
@@ -146,32 +150,36 @@ class _SimulationScreenState extends State<SimulationScreen> {
         _isLoading = false;
       });
 
-      // Add AI response message to chat
-      final aiMessage =
-          response.action.message ?? response.action.text ?? response.action.label ?? '';
-      if (aiMessage.isNotEmpty) {
-        setState(() {
-          _messages.add(ChatMessage(
-            text: aiMessage,
-            isUser: false,
-            timestamp: DateTime.now(),
-          ));
-        });
-      }
-
-      // For FORM_COMPLETE, add a special message
+      // For FORM_COMPLETE, add a rich card message with the final data
       if (response.action.isFormComplete) {
+        final summaryText =
+            response.action.message ?? response.action.text ?? '';
         setState(() {
           _messages.add(ChatMessage(
-            text: 'Form completed! Review the final data in the widget panel.',
+            text: summaryText,
             isUser: false,
             timestamp: DateTime.now(),
+            formCompleteData: response.action.data,
           ));
         });
+      } else {
+        // Add AI response message to chat
+        final aiMessage = response.action.message ??
+            response.action.text ??
+            response.action.label ??
+            '';
+        if (aiMessage.isNotEmpty) {
+          setState(() {
+            _messages.add(ChatMessage(
+              text: aiMessage,
+              isUser: false,
+              timestamp: DateTime.now(),
+            ));
+          });
+        }
       }
     } on ChatServiceException catch (e) {
       setState(() {
-        _errorMessage = e.message;
         _isLoading = false;
         _messages.add(ChatMessage(
           text: 'Error: ${e.message}',
@@ -180,11 +188,6 @@ class _SimulationScreenState extends State<SimulationScreen> {
         ));
       });
     }
-  }
-
-  /// Handle widget submission (dropdown selection, text entry, etc).
-  Future<void> _onWidgetSubmit(String value) async {
-    await _onUserMessage(value);
   }
 
   /// Reset the current conversation.
@@ -294,7 +297,7 @@ class _SimulationScreenState extends State<SimulationScreen> {
           const SizedBox(width: 8),
         ],
       ),
-      body: _schema == null ? _buildWelcome() : _buildThreePanelLayout(),
+      body: _schema == null ? _buildWelcome() : _buildTwoPanelLayout(),
     );
   }
 
@@ -359,11 +362,11 @@ class _SimulationScreenState extends State<SimulationScreen> {
     );
   }
 
-  Widget _buildThreePanelLayout() {
+  Widget _buildTwoPanelLayout() {
     return LayoutBuilder(
       builder: (context, constraints) {
         // Responsive: stack vertically on narrow screens
-        if (constraints.maxWidth < 900) {
+        if (constraints.maxWidth < 700) {
           return _buildStackedLayout();
         }
         return _buildSideBySideLayout();
@@ -375,30 +378,21 @@ class _SimulationScreenState extends State<SimulationScreen> {
     return Row(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        // Chat panel (left)
-        SizedBox(
-          width: 340,
+        // Chat panel (left, takes most space)
+        Expanded(
+          flex: 3,
           child: ChatPanel(
             messages: _messages,
             isLoading: _isLoading,
             onSendMessage: _onUserMessage,
             isSessionActive: _conversationId != null,
-          ),
-        ),
-        const VerticalDivider(width: 1),
-        // Dynamic widget panel (center)
-        Expanded(
-          child: DynamicWidgetPanel(
-            action: _currentAction,
-            isLoading: _isLoading,
-            errorMessage: _errorMessage,
-            onSubmit: _onWidgetSubmit,
+            currentAction: _currentAction,
           ),
         ),
         const VerticalDivider(width: 1),
         // Debug panel (right)
-        SizedBox(
-          width: 340,
+        Expanded(
+          flex: 2,
           child: DebugPanel(
             schema: _schema,
             answers: _answers,
@@ -412,13 +406,12 @@ class _SimulationScreenState extends State<SimulationScreen> {
 
   Widget _buildStackedLayout() {
     return DefaultTabController(
-      length: 3,
+      length: 2,
       child: Column(
         children: [
           const TabBar(
             tabs: [
               Tab(icon: Icon(Icons.chat), text: 'Chat'),
-              Tab(icon: Icon(Icons.widgets), text: 'Widget'),
               Tab(icon: Icon(Icons.bug_report), text: 'Debug'),
             ],
           ),
@@ -430,12 +423,7 @@ class _SimulationScreenState extends State<SimulationScreen> {
                   isLoading: _isLoading,
                   onSendMessage: _onUserMessage,
                   isSessionActive: _conversationId != null,
-                ),
-                DynamicWidgetPanel(
-                  action: _currentAction,
-                  isLoading: _isLoading,
-                  errorMessage: _errorMessage,
-                  onSubmit: _onWidgetSubmit,
+                  currentAction: _currentAction,
                 ),
                 DebugPanel(
                   schema: _schema,
