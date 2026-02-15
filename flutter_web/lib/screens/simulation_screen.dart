@@ -220,14 +220,15 @@ class _SimulationScreenState extends State<SimulationScreen> {
     final toolArgs = action.toolArgs ?? {};
     final toolMessage = action.message ?? 'Executing $toolName...';
 
-    // Show a tool-executing message in chat
+    // Show a temporary tool-executing message in chat
+    final toolMsg = ChatMessage(
+      text: toolMessage,
+      isUser: false,
+      timestamp: DateTime.now(),
+      isToolCall: true,
+    );
     setState(() {
-      _messages.add(ChatMessage(
-        text: toolMessage,
-        isUser: false,
-        timestamp: DateTime.now(),
-        isToolCall: true,
-      ));
+      _messages.add(toolMsg);
       _isLoading = true;
     });
 
@@ -236,6 +237,11 @@ class _SimulationScreenState extends State<SimulationScreen> {
 
     // Execute the mock tool
     final mockResult = executeMockTool(toolName, toolArgs);
+
+    // Remove the temporary tool message — the next AI response will replace it
+    setState(() {
+      _messages.remove(toolMsg);
+    });
 
     // Send the tool result back to the backend
     await _sendToBackend(

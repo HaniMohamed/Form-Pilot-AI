@@ -100,7 +100,7 @@ class ChatService {
             headers: {'Content-Type': 'application/json'},
             body: jsonEncode(body),
           )
-          .timeout(const Duration(seconds: 60));
+          .timeout(const Duration(minutes: 5));
 
       return _handleResponse(response);
     } on http.ClientException catch (e) {

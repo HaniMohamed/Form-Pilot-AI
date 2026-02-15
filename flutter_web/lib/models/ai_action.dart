@@ -19,10 +19,11 @@ enum ActionType {
   final String value;
   const ActionType(this.value);
 
+  /// Parse an action type string, falling back to [message] for unknown types.
   static ActionType fromString(String value) {
     return ActionType.values.firstWhere(
       (e) => e.value == value,
-      orElse: () => throw ArgumentError('Unknown ActionType: $value'),
+      orElse: () => ActionType.message,
     );
   }
 }

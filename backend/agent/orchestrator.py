@@ -25,15 +25,29 @@ from backend.core.actions import build_message_action
 
 logger = logging.getLogger(__name__)
 
-# Maximum retries when LLM returns invalid JSON
-MAX_JSON_RETRIES = 2
+# Valid action types the frontend can handle
+VALID_ACTION_TYPES = {
+    "MESSAGE",
+    "ASK_DROPDOWN",
+    "ASK_CHECKBOX",
+    "ASK_TEXT",
+    "ASK_DATE",
+    "ASK_DATETIME",
+    "ASK_LOCATION",
+    "TOOL_CALL",
+    "FORM_COMPLETE",
+}
 
-# Corrective prompt sent when LLM output is not valid JSON
+# Maximum retries when LLM returns invalid JSON or invalid actions
+MAX_JSON_RETRIES = 3
+
+# Corrective prompt sent when LLM output is not valid JSON.
+# Very direct and assertive — small models need blunt instructions.
 JSON_RETRY_PROMPT = (
-    "Your previous response was not valid JSON. "
-    "You MUST respond with a valid JSON object. "
-    "Do not include any text outside the JSON object. "
-    "Try again."
+    "WRONG. Your response was NOT valid JSON. "
+    "You MUST respond with ONLY a JSON object like: "
+    '{"action": "MESSAGE", "text": "hello"} '
+    "NO explanations. NO markdown. NO plain text. ONLY JSON. Try again now."
 )
 
 # Maximum conversation history messages to include in LLM context
@@ -61,6 +75,9 @@ class FormOrchestrator:
         self.answers: dict[str, Any] = {}
         self.conversation_history: list[dict[str, str]] = []
         self._initial_extraction_done: bool = False
+        # Track the field currently being asked so we can auto-store
+        # the user's answer deterministically (don't rely on LLM to echo it)
+        self._pending_field_id: str | None = None
 
     def get_initial_action(self) -> dict:
         """Get the first action — a greeting asking the user to describe their data.
@@ -99,6 +116,17 @@ class FormOrchestrator:
                     "user",
                     f"[Tool result for {tool_name}]: {json.dumps(tool_data)}",
                 )
+
+        # Auto-store answer: if we were asking a field and the user responded
+        # (not a tool result), store their answer deterministically
+        if self._pending_field_id and user_message.strip() and not tool_results:
+            self.answers[self._pending_field_id] = user_message.strip()
+            logger.info(
+                "Auto-stored answer: %s = %s",
+                self._pending_field_id,
+                user_message.strip()[:100],
+            )
+            self._pending_field_id = None
 
         # Add the user message to history (skip if empty and we have tool results)
         if user_message.strip():
@@ -191,7 +219,7 @@ class FormOrchestrator:
     def _finalize_action(self, parsed: dict) -> dict:
         """Process a parsed LLM response and track state.
 
-        Extracts answers from ASK_* responses (when the LLM includes a value),
+        Tracks the pending field for deterministic answer storage,
         and records the assistant message in conversation history.
 
         Args:
@@ -201,12 +229,20 @@ class FormOrchestrator:
             The action dict for the UI.
         """
         action_type = parsed.get("action", "")
-
-        # If the LLM set a field value, store it
         field_id = parsed.get("field_id")
+
+        # If the LLM explicitly set a field value, store it
         value = parsed.get("value")
         if field_id and value is not None:
             self.answers[field_id] = value
+
+        # Track which field is being asked — the user's next message
+        # will be auto-stored as the answer for this field
+        if action_type.startswith("ASK_") and field_id:
+            self._pending_field_id = field_id
+            logger.info("Now asking field: %s", field_id)
+        else:
+            self._pending_field_id = None
 
         # If FORM_COMPLETE, make sure we have the data
         if action_type == "FORM_COMPLETE":
@@ -239,16 +275,70 @@ class FormOrchestrator:
         """
         for attempt in range(MAX_JSON_RETRIES + 1):
             try:
+                logger.info(
+                    "Calling LLM (attempt %d/%d, %d messages)...",
+                    attempt + 1,
+                    MAX_JSON_RETRIES + 1,
+                    len(messages),
+                )
                 response = await self.llm.ainvoke(messages)
                 content = response.content.strip()
+
+                logger.debug("LLM raw response (first 500 chars): %s", content[:500])
+
                 parsed = self._extract_json(content)
                 if parsed is not None:
+                    # Validate action type — LLM sometimes invents types
+                    action = parsed.get("action", "")
+                    intent = parsed.get("intent", "")
+                    if action and action not in VALID_ACTION_TYPES and not intent:
+                        logger.warning(
+                            "LLM returned unknown action type '%s' (attempt %d/%d)",
+                            action,
+                            attempt + 1,
+                            MAX_JSON_RETRIES + 1,
+                        )
+                        # Convert to MESSAGE if it has text content
+                        text = parsed.get("text") or parsed.get("message", "")
+                        if text:
+                            parsed = {"action": "MESSAGE", "text": text}
+                            logger.info("Converted unknown action to MESSAGE")
+                            return parsed
+                        # Otherwise retry — it's gibberish
+                        messages.append(HumanMessage(content=JSON_RETRY_PROMPT))
+                        continue
+
+                    # Catch ASK_DROPDOWN/ASK_CHECKBOX with empty options —
+                    # the model skipped the required TOOL_CALL
+                    if action in ("ASK_DROPDOWN", "ASK_CHECKBOX"):
+                        options = parsed.get("options")
+                        if not options or (isinstance(options, list) and len(options) == 0):
+                            logger.warning(
+                                "LLM returned %s with empty options for '%s' — "
+                                "retrying to get TOOL_CALL first",
+                                action,
+                                parsed.get("field_id", "?"),
+                            )
+                            messages.append(HumanMessage(content=(
+                                "WRONG. You returned ASK_DROPDOWN with empty options. "
+                                "You do NOT have the options yet. "
+                                "You MUST return a TOOL_CALL first to fetch the data. "
+                                "Check the form: which tool provides data for this field? "
+                                "Return a TOOL_CALL for that tool NOW."
+                            )))
+                            continue
+
+                    logger.info(
+                        "LLM returned valid JSON action: %s",
+                        action or intent or "unknown",
+                    )
                     return parsed
 
                 logger.warning(
-                    "LLM returned invalid JSON (attempt %d): %s",
+                    "LLM returned invalid JSON (attempt %d/%d): %s",
                     attempt + 1,
-                    content[:200],
+                    MAX_JSON_RETRIES + 1,
+                    content[:300],
                 )
                 messages.append(HumanMessage(content=JSON_RETRY_PROMPT))
 
@@ -257,6 +347,7 @@ class FormOrchestrator:
                 if attempt == MAX_JSON_RETRIES:
                     return None
 
+        logger.error("All %d LLM attempts failed to produce valid JSON", MAX_JSON_RETRIES + 1)
         return None
 
     def _extract_json(self, content: str) -> dict | None:

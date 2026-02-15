@@ -40,7 +40,8 @@ def get_llm(provider: str | None = None, **kwargs) -> BaseChatModel:
     provider = provider or os.getenv("LLM_PROVIDER", "openai")
 
     # Sensible defaults — can be overridden via kwargs
-    defaults = {"temperature": 0, "max_tokens": 1024}
+    # request_timeout covers slow local models (e.g. Ollama with large context)
+    defaults = {"temperature": 0, "max_tokens": 1024, "request_timeout": 300}
     merged = {**defaults, **kwargs}
 
     match provider:

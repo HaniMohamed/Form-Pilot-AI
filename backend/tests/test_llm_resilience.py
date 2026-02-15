@@ -342,7 +342,7 @@ class TestRetryMechanism:
     async def test_all_retries_exhausted_during_extraction(self):
         """All extraction retries fail — falls through to conversation (also fails)."""
         llm = FailThenSucceedLLM(
-            failures=["bad1", "bad2", "bad3", "bad4", "bad5", "bad6"],
+            failures=["bad1", "bad2", "bad3", "bad4", "bad5", "bad6", "bad7", "bad8"],
             success={"intent": "multi_answer", "answers": {"leave_type": "X"},
                      "message": "X"},
         )

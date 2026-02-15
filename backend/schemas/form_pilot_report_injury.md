@@ -429,25 +429,27 @@ All submissions are handled by the Flutter app. The AI only triggers them via to
 
 ## Field Summary Table
 
-| # | Field | Type | Required | Data Source | Visibility Condition |
+IMPORTANT: Fields marked "TOOL_CALL FIRST" in the "Before Asking" column MUST have their tool called BEFORE you can ask the user. You will NOT have the options until the tool returns data. NEVER send ASK_DROPDOWN with empty options.
+
+| # | Field ID | Type | Required | Before Asking | Ask User |
 |---|---|---|---|---|---|
-| 1 | Establishment | Single-select | Yes | Flutter app (`get_establishments`) | Always |
-| 2 | Occupation | Single-select | Yes | Nested in establishment data | After establishment selected |
-| 3 | Injury Date | Date | Yes | User input | Always (Step 2) |
-| 4 | Injury Time | Time (AM/PM) | Yes | User input | Always (Step 2) |
-| 5 | Work Disability Date | Date | Yes | User input | Always (Step 2) |
-| 6 | Contributor Informed Date | Date | Yes | User input (min = injury date) | Always (Step 2) |
-| 7 | Delay Reason | Free text | Conditional | User input | `informedDate - injuryDate >= 7 days` |
-| 8 | Injury Description | Free text | Yes | User input | Always (Step 2) |
-| 9 | Injury Type | Single-select | Yes | Flutter app (`get_injury_types`) | Always (Step 2) |
-| 10 | Injury Reason | Single-select | Yes | Flutter app (`get_injury_reasons`) | After injury type selected |
-| 11 | Injury Location Details | Free text | No | User input | Feature flag ON |
-| 12 | Injury Location | Map pin (native map) | Yes | Flutter app (`show_location_picker`) | Always (Step 2) |
-| 13 | Treatment Started | Yes/No | Yes | Static | Always (Step 2) |
-| 14 | Place Type | Single-select | Yes | Static (5 or 2 options per flag) | Always (Step 2) |
-| 15 | Government Sector | Single-select | Yes | Static (5 options) | Always (Step 2) |
-| 16 | Emergency Phone | Phone + country code | Yes | User input | Always (Step 3) |
-| 17 | Document Uploads | File upload | Conditional | Flutter app (`get_required_documents`) | Feature flag OFF |
+| 1 | `selectedEstablishment` | dropdown | Yes | **TOOL_CALL `get_establishments` FIRST** — you need the list | "Which establishment was the injury related to?" + show options from tool result |
+| 2 | `selectedOccupation` | dropdown | Yes | Options come from the `get_establishments` result (nested in selected establishment) | "Which occupation were you working under?" |
+| 3 | `injuryDate` | date | Yes | None — ask user directly | "When did the injury occur? (date)" |
+| 4 | `injuryTime` | time | Yes | None — ask user directly | "What time did the injury occur?" |
+| 5 | `workDisabilityDate` | date | Yes | None — ask user directly | "When did the work disability start?" |
+| 6 | `contributorInformedDate` | date | Yes | None — must be on or after injuryDate | "When were you informed about the injury?" |
+| 7 | `delayReason` | text | Only if informed date - injury date >= 7 days | None | "Why was there a delay in reporting?" |
+| 8 | `injuryOccurred` | text | Yes | None — ask user directly | "Please describe how the injury occurred" |
+| 9 | `selectedInjuryType` | dropdown | Yes | **TOOL_CALL `get_injury_types` FIRST** — you need the list | "What type of injury?" + show options from tool result |
+| 10 | `selectedInjuryReason` | dropdown | Yes | **TOOL_CALL `get_injury_reasons` FIRST** (pass selected injury type) | "What was the reason?" + show options from tool result |
+| 11 | `injuryLocationDetails` | text | No (only if feature flag ON) | None | "Any additional location details?" |
+| 12 | `locationResults` | location | Yes | **TOOL_CALL `show_location_picker` FIRST** — user pins on map | Confirm the address returned by the tool |
+| 13 | `treatmentStarted` | dropdown | Yes | None — static options | "Has treatment started?" options: ["Yes", "No"] |
+| 14 | `placeType` | dropdown | Yes | None — static options | "Where did the injury take place?" options: ["Road", "Unspecified Place", "Field Workplace", "Establishment Workplace", "Other"] |
+| 15 | `governmentSector` | dropdown | Yes | None — static options | "Was a government sector involved?" options: ["Police", "Traffic Department", "Red Crescent", "Fire Department", "Not Applicable"] |
+| 16 | `emergencyMobileNumber` | text | Yes | None — ask user directly | "Emergency contact phone number? (default: Saudi Arabia +966)" |
+| 17 | Document Uploads | file | Only if feature flag OFF | **TOOL_CALL `get_required_documents` FIRST** | Guide user through each upload via `upload_document` |
 
 ---
 
@@ -490,29 +492,22 @@ All submissions are handled by the Flutter app. The AI only triggers them via to
 
 ## Chat Agent Instructions
 
-1. **Start**: Call `get_feature_flags` and `get_establishments` to receive context and user data. Greet the user and explain you'll help them report an occupational injury.
-2. **Step 1**:
-   - Present the user's establishments (from `get_establishments` response).
-   - After selection, present the occupations under that establishment.
-   - Confirm both selections. Call `set_field_value` for each.
-3. **Step 2** (call `get_injury_types` at the start):
-   - Ask for injury date and time.
-   - Ask for work disability date.
-   - Ask when the contributor was informed.
-   - If 7+ day gap detected, ask for delay reason.
-   - Ask for a description of the injury.
-   - Present injury types (from `get_injury_types` response). After selection, call `get_injury_reasons` and present reasons.
-   - Ask for injury location. Call `show_location_picker` — Flutter app shows a button, user taps to open the map, pins the location. Confirm the resolved address.
-   - Ask if treatment has started (default: Yes).
-   - Present place type options.
-   - Present government sector options.
-   - Summarize all data and confirm with user.
-   - Call `validate_step(2)`. If valid, call `submit_injury_report`.
-4. **Step 3**:
-   - Ask for emergency contact phone number. Call `submit_emergency_contact`.
-   - If documents are required (based on feature flag), present the document list (from `get_required_documents` response) and guide user through uploads via `upload_document`.
-   - Call `submit_final`. Present the tracking reference number to the user.
+CRITICAL RULE: When a field says "TOOL_CALL FIRST" in the Field Summary Table, you MUST return a TOOL_CALL action to fetch the data BEFORE asking the user. NEVER return ASK_DROPDOWN with empty or made-up options.
 
-**Error handling**: If any tool call returns an error, inform the user in a friendly way and retry or ask for corrected input. Never expose technical error details.
+### Step-by-step flow (return ONE JSON action at a time):
 
-**Tone**: Professional, empathetic (the user may be injured), clear, and concise. Support both Arabic and English seamlessly.
+1. **First action**: Return `{"action": "TOOL_CALL", "tool_name": "get_establishments", "tool_args": {}, "message": "Let me look up your establishments."}` — you need this data before you can ask field #1.
+2. **After `get_establishments` returns**: Present establishments as ASK_DROPDOWN with real options from the tool result.
+3. **After user selects establishment**: Present occupations from the same data as ASK_DROPDOWN.
+4. **Fields #3–#8**: Ask the user directly (ASK_DATE, ASK_TEXT, etc.) — no tool calls needed.
+5. **Before field #9 (injury type)**: Return TOOL_CALL for `get_injury_types` first, then present as ASK_DROPDOWN.
+6. **Before field #10 (injury reason)**: Return TOOL_CALL for `get_injury_reasons` first, then present as ASK_DROPDOWN.
+7. **Field #12 (location)**: Return TOOL_CALL for `show_location_picker` — the app opens a map for the user.
+8. **Fields #13–#15**: Ask with static options already listed in the Field Summary Table.
+9. **After all Step 2 fields**: Return TOOL_CALL for `validate_step` then `submit_injury_report`.
+10. **Field #16**: Ask for emergency phone number directly.
+11. **Final**: Return TOOL_CALL for `submit_final`.
+
+**Error handling**: If any tool call returns an error, inform the user and retry. Never expose technical details.
+
+**Tone**: Professional, empathetic, clear, concise. Support Arabic and English.
