@@ -127,11 +127,13 @@ class _ChatPanelState extends State<ChatPanel> {
                 ),
         ),
 
-        // Inline action widget (shown above the text input when action is active)
-        if (_shouldShowInlineWidget) _buildInlineActionWidget(colorScheme),
-
-        // Text input area (always visible, disabled when form is complete)
-        _buildTextInput(colorScheme),
+        // Input area: show action widget OR text input, not both.
+        // When a structured action (dropdown, date picker, etc.) is active,
+        // the text input is hidden and replaced by the action widget.
+        if (_shouldShowInlineWidget)
+          _buildInlineActionWidget(colorScheme)
+        else
+          _buildTextInput(colorScheme),
       ],
     );
   }
@@ -270,7 +272,6 @@ class _ChatPanelState extends State<ChatPanel> {
     if (widget.currentAction?.type == ActionType.askText) {
       return widget.currentAction?.label ?? 'Type your response...';
     }
-    if (_shouldShowInlineWidget) return 'Or type your response...';
     return 'Type your response...';
   }
 

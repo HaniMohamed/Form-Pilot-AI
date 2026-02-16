@@ -31,6 +31,179 @@ _KEY_SECTIONS = [
 ]
 
 
+def extract_form_title(form_context_md: str) -> str:
+    """Extract the form title from the first markdown heading.
+
+    Looks for the first line starting with '# ' and returns the text.
+    Falls back to 'Form' if no heading is found.
+
+    Args:
+        form_context_md: The markdown form definition.
+
+    Returns:
+        The form title string.
+    """
+    for line in form_context_md.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("# "):
+            title = stripped[2:].strip()
+            # Remove common prefixes like "Form Pilot:" for cleaner display
+            for prefix in ["Form Pilot:", "Form Pilot -", "FormPilot:"]:
+                if title.lower().startswith(prefix.lower()):
+                    title = title[len(prefix) :].strip()
+            return title
+    return "Form"
+
+
+def summarize_required_fields(form_context_md: str) -> str:
+    """Build a natural-language summary of the required fields.
+
+    Parses the Field Summary Table, groups required fields by type,
+    and returns a conversational sentence describing what data is needed.
+
+    Args:
+        form_context_md: The markdown form definition.
+
+    Returns:
+        A human-friendly summary string, or empty string if nothing found.
+    """
+    # Collect (field_id, type) pairs for required rows
+    fields: list[tuple[str, str]] = []
+    in_table = False
+
+    for line in form_context_md.splitlines():
+        stripped = line.strip()
+        if "Field ID" in stripped and "Required" in stripped and "|" in stripped:
+            in_table = True
+            continue
+        if in_table and stripped.startswith("|") and "---" in stripped:
+            continue
+        if in_table and stripped.startswith("|"):
+            cells = [c.strip() for c in stripped.split("|")]
+            cells = [c for c in cells if c]
+            if len(cells) >= 4:
+                field_id = cells[1].strip("`").strip()
+                field_type = cells[2].strip().lower()
+                required_raw = cells[3].strip().lower()
+                if required_raw.startswith("yes") and field_id:
+                    fields.append((field_id, field_type))
+        elif in_table and not stripped.startswith("|"):
+            break
+
+    if not fields:
+        return ""
+
+    return _build_natural_summary(fields)
+
+
+def _build_natural_summary(fields: list[tuple[str, str]]) -> str:
+    """Turn a list of (field_id, type) pairs into a conversational summary.
+
+    Groups related fields by type and produces a warm, natural sentence
+    that reads like a person explaining what info they need.
+    """
+    dates: list[str] = []
+    times: list[str] = []
+    texts: list[str] = []
+    dropdowns: list[str] = []
+    locations: list[str] = []
+
+    for field_id, field_type in fields:
+        name = _camel_to_words(field_id)
+        if field_type in ("date", "datetime"):
+            dates.append(name)
+        elif field_type == "time":
+            times.append(name)
+        elif field_type == "text":
+            texts.append(name)
+        elif field_type in ("dropdown", "checkbox"):
+            dropdowns.append(name)
+        elif field_type == "location":
+            locations.append(name)
+
+    # Build natural phrases for each category
+    phrases: list[str] = []
+
+    # Dropdowns first — usually the most recognizable items
+    if dropdowns:
+        if len(dropdowns) <= 3:
+            phrases.append(f"your {_join_names(dropdowns)}")
+        else:
+            # List a few examples, then summarize the rest naturally
+            samples = ", ".join(dropdowns[:3])
+            phrases.append(f"your {samples}, and a few other choices")
+
+    # Dates and times — combine into one phrase
+    if dates and times:
+        phrases.append("relevant dates and times")
+    elif dates:
+        phrases.append("a few important dates" if len(dates) > 1 else "a date")
+
+    # Text fields
+    if texts:
+        phrases.append(
+            "a description of what happened"
+            if len(texts) == 1
+            else "some written details"
+        )
+
+    # Location
+    if locations:
+        phrases.append("the location")
+
+    if not phrases:
+        return ""
+
+    total = len(fields)
+    return (
+        f"I'll walk you through about {total} items — "
+        f"things like {_join_phrases(phrases)}"
+    )
+
+
+def _camel_to_words(name: str) -> str:
+    """Convert a camelCase field ID to a readable lowercase phrase.
+
+    Strips common prefixes/suffixes to produce a clean label.
+    Example: 'selectedEstablishment' -> 'establishment'
+             'injuryDate' -> 'injury date'
+             'locationResults' -> 'location'
+    """
+    # Remove common prefixes
+    for prefix in ["selected", "contributor"]:
+        if name.lower().startswith(prefix) and len(name) > len(prefix):
+            name = name[len(prefix) :]
+            name = name[0].lower() + name[1:]
+
+    # Remove common suffixes that are implementation details
+    for suffix in ["Results", "Details", "Data"]:
+        if name.endswith(suffix) and len(name) > len(suffix):
+            name = name[: -len(suffix)]
+
+    # Split on camelCase boundaries
+    import re as _re
+
+    return _re.sub(r"([a-z])([A-Z])", r"\1 \2", name).lower()
+
+
+def _join_names(names: list[str]) -> str:
+    """Join names with commas and 'and': ['a', 'b', 'c'] -> 'a, b, and c'."""
+    if len(names) == 0:
+        return ""
+    if len(names) == 1:
+        return names[0]
+    if len(names) == 2:
+        return f"{names[0]} and {names[1]}"
+    return ", ".join(names[:-1]) + f", and {names[-1]}"
+
+
+def _join_phrases(phrases: list[str]) -> str:
+    """Join phrases naturally with commas and a final 'and'."""
+    if len(phrases) <= 2:
+        return _join_names(phrases)
+    return ", ".join(phrases[:-1]) + f", and {phrases[-1]}"
+
+
 def extract_required_field_ids(form_context_md: str) -> list[str]:
     """Extract required field IDs from the Field Summary Table in the markdown.
 
@@ -74,6 +247,45 @@ def extract_required_field_ids(form_context_md: str) -> list[str]:
             break
 
     return required
+
+
+def extract_field_type_map(form_context_md: str) -> dict[str, str]:
+    """Extract a mapping of field_id -> field_type from the Field Summary Table.
+
+    Parses the markdown table and returns a dict like:
+    {"injuryDate": "date", "injuryTime": "time", "selectedEstablishment": "dropdown", ...}
+
+    Args:
+        form_context_md: The markdown form definition.
+
+    Returns:
+        Dict mapping field IDs to their type strings (lowercase).
+    """
+    field_types: dict[str, str] = {}
+    in_table = False
+
+    for line in form_context_md.splitlines():
+        stripped = line.strip()
+        # Detect the Field Summary Table header — must have all three keywords
+        # to avoid matching individual field property tables
+        if "Field ID" in stripped and "Required" in stripped and "|" in stripped:
+            in_table = True
+            continue
+        if in_table and stripped.startswith("|") and "---" in stripped:
+            continue
+        if in_table and stripped.startswith("|"):
+            cells = [c.strip() for c in stripped.split("|")]
+            cells = [c for c in cells if c]
+            # Table columns: #, Field ID, Type, Required, Before Asking, Ask User
+            if len(cells) >= 4:
+                field_id = cells[1].strip("`").strip()
+                field_type = cells[2].strip().lower()
+                if field_id:
+                    field_types[field_id] = field_type
+        elif in_table and not stripped.startswith("|"):
+            break
+
+    return field_types
 
 
 def condense_form_context(form_context_md: str) -> str:
@@ -186,6 +398,7 @@ RULES:
 - NEVER fabricate or assume values. Only use what the user provides.
 - CRITICAL: If a field says "TOOL_CALL FIRST" in the form, you MUST return a TOOL_CALL to fetch the data BEFORE asking the user. NEVER return ASK_DROPDOWN with empty options [].
 - CRITICAL: NEVER use MESSAGE to ask the user for field data. Use ASK_TEXT for text/time fields, ASK_DATE for dates, ASK_DROPDOWN for dropdowns, etc. MESSAGE is ONLY for greetings or informational text, NOT for asking questions.
+- VALIDATION: If the system tells you a user's answer is INVALID, you MUST re-ask the same field with a helpful error message explaining what format is expected. Do NOT skip the field or move to the next one.
 - When the app returns tool results, use that data to present real options.
 - Respond in the same language the user speaks.
 - If the user corrects a previous answer, accept the correction.

@@ -1,6 +1,6 @@
 /// Main simulation screen with two-panel layout:
 /// 1. Chat panel (left) — messages, inline action widgets, and text input
-/// 2. JSON debug panel (right) — current answers, last action
+/// 2. JSON debug panel (right) — current answers, full action log
 library;
 
 import 'package:flutter/material.dart';
@@ -50,6 +50,8 @@ class _SimulationScreenState extends State<SimulationScreen> {
   String? _formFilename;
   String? _conversationId;
   AIAction? _currentAction;
+  List<AIAction> _actionLog = [];
+  List<Map<String, dynamic>> _requestLog = [];
   Map<String, dynamic> _answers = {};
   List<ChatMessage> _messages = [];
   bool _isLoading = false;
@@ -84,12 +86,17 @@ class _SimulationScreenState extends State<SimulationScreen> {
       _formFilename = filename;
       _conversationId = null;
       _currentAction = null;
+      _actionLog = [];
+      _requestLog = [];
       _answers = {};
       _messages = [];
       _isLoading = true;
     });
 
     try {
+      // Log the outgoing request (empty message to init session)
+      _logRequest(userMessage: '', conversationId: null);
+
       // Send empty message to initialize the session and get greeting
       final response = await _chatService.sendMessage(
         formContextMd: content,
@@ -99,6 +106,7 @@ class _SimulationScreenState extends State<SimulationScreen> {
       setState(() {
         _conversationId = response.conversationId;
         _currentAction = response.action;
+        _actionLog.add(response.action);
         _answers = response.answers;
         _isLoading = false;
       });
@@ -152,6 +160,13 @@ class _SimulationScreenState extends State<SimulationScreen> {
     List<Map<String, dynamic>>? toolResults,
   }) async {
     try {
+      // Log the outgoing request
+      _logRequest(
+        userMessage: userMessage,
+        conversationId: _conversationId,
+        toolResults: toolResults,
+      );
+
       final response = await _chatService.sendMessage(
         formContextMd: _formContextMd!,
         userMessage: userMessage,
@@ -162,6 +177,7 @@ class _SimulationScreenState extends State<SimulationScreen> {
       setState(() {
         _conversationId = response.conversationId;
         _currentAction = response.action;
+        _actionLog.add(response.action);
         _answers = response.answers;
         _isLoading = false;
       });
@@ -253,6 +269,26 @@ class _SimulationScreenState extends State<SimulationScreen> {
         },
       ],
     );
+  }
+
+  /// Record a request payload for the debug panel.
+  ///
+  /// Captures the data sent to /api/chat, excluding form_context_md
+  /// (which is large and always the same within a session).
+  void _logRequest({
+    required String userMessage,
+    required String? conversationId,
+    List<Map<String, dynamic>>? toolResults,
+  }) {
+    final entry = <String, dynamic>{
+      'user_message': userMessage,
+      if (conversationId != null) 'conversation_id': conversationId,
+      if (toolResults != null) 'tool_results': toolResults,
+    };
+
+    setState(() {
+      _requestLog.add(entry);
+    });
   }
 
   /// Reset the current conversation.
@@ -462,6 +498,8 @@ class _SimulationScreenState extends State<SimulationScreen> {
             formFilename: _formFilename,
             answers: _answers,
             currentAction: _currentAction,
+            actionLog: _actionLog,
+            requestLog: _requestLog,
             conversationId: _conversationId,
           ),
         ),
@@ -494,6 +532,8 @@ class _SimulationScreenState extends State<SimulationScreen> {
                   formFilename: _formFilename,
                   answers: _answers,
                   currentAction: _currentAction,
+                  actionLog: _actionLog,
+                  requestLog: _requestLog,
                   conversationId: _conversationId,
                 ),
               ],

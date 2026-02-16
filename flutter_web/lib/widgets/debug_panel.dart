@@ -1,7 +1,8 @@
-/// Debug panel — shows current answers, last action JSON, and session info.
+/// Debug panel — shows current answers, request log, action log, and session info.
 ///
 /// Provides a real-time view of the conversation state for development
-/// and testing purposes.
+/// and testing purposes. Logs every request sent to the API and every
+/// response received (newest first).
 library;
 
 import 'dart:convert';
@@ -15,6 +16,8 @@ class DebugPanel extends StatelessWidget {
   final String? formFilename;
   final Map<String, dynamic> answers;
   final AIAction? currentAction;
+  final List<AIAction> actionLog;
+  final List<Map<String, dynamic>> requestLog;
   final String? conversationId;
 
   const DebugPanel({
@@ -22,6 +25,8 @@ class DebugPanel extends StatelessWidget {
     required this.formFilename,
     required this.answers,
     required this.currentAction,
+    required this.actionLog,
+    required this.requestLog,
     required this.conversationId,
   });
 
@@ -66,7 +71,9 @@ class DebugPanel extends StatelessWidget {
                     const SizedBox(height: 4),
                     _buildAnswersSection(colorScheme),
                     const SizedBox(height: 4),
-                    _buildLastActionSection(colorScheme),
+                    _buildRequestLogSection(colorScheme),
+                    const SizedBox(height: 4),
+                    _buildActionLogSection(colorScheme),
                   ],
                 ),
         ),
@@ -101,6 +108,8 @@ class DebugPanel extends StatelessWidget {
           _kvRow('Form', formFilename ?? '-'),
           _kvRow('Conversation ID', conversationId ?? '-'),
           _kvRow('Answers', '${answers.length}'),
+          _kvRow('Requests', '${requestLog.length}'),
+          _kvRow('Responses', '${actionLog.length}'),
         ],
       ),
     );
@@ -126,23 +135,63 @@ class DebugPanel extends StatelessWidget {
     );
   }
 
-  Widget _buildLastActionSection(ColorScheme colorScheme) {
+  Widget _buildRequestLogSection(ColorScheme colorScheme) {
     return _DebugSection(
-      title: 'Last Action',
-      icon: Icons.play_arrow_outlined,
-      initiallyExpanded: true,
-      child: currentAction == null
+      title: 'Request Log (${requestLog.length})',
+      icon: Icons.upload_outlined,
+      initiallyExpanded: false,
+      child: requestLog.isEmpty
           ? const Padding(
               padding: EdgeInsets.all(8),
               child: Text(
-                'No action yet',
+                'No requests yet',
                 style: TextStyle(
                   color: Colors.grey,
                   fontStyle: FontStyle.italic,
                 ),
               ),
             )
-          : _JsonView(data: currentAction!.toJson()),
+          : Column(
+              children: [
+                // Show requests in reverse order (newest first)
+                for (int i = requestLog.length - 1; i >= 0; i--)
+                  _RequestLogEntry(
+                    index: i + 1,
+                    data: requestLog[i],
+                    isLatest: i == requestLog.length - 1,
+                  ),
+              ],
+            ),
+    );
+  }
+
+  Widget _buildActionLogSection(ColorScheme colorScheme) {
+    return _DebugSection(
+      title: 'Action Log (${actionLog.length})',
+      icon: Icons.list_alt_outlined,
+      initiallyExpanded: true,
+      child: actionLog.isEmpty
+          ? const Padding(
+              padding: EdgeInsets.all(8),
+              child: Text(
+                'No actions yet',
+                style: TextStyle(
+                  color: Colors.grey,
+                  fontStyle: FontStyle.italic,
+                ),
+              ),
+            )
+          : Column(
+              children: [
+                // Show actions in reverse order (newest first)
+                for (int i = actionLog.length - 1; i >= 0; i--)
+                  _ActionLogEntry(
+                    index: i + 1,
+                    action: actionLog[i],
+                    isLatest: i == actionLog.length - 1,
+                  ),
+              ],
+            ),
     );
   }
 
@@ -171,6 +220,227 @@ class DebugPanel extends StatelessWidget {
         ],
       ),
     );
+  }
+}
+
+/// A single action entry in the log, with a header showing the index and
+/// action type, and a collapsible JSON body.
+class _ActionLogEntry extends StatelessWidget {
+  final int index;
+  final AIAction action;
+  final bool isLatest;
+
+  const _ActionLogEntry({
+    required this.index,
+    required this.action,
+    required this.isLatest,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final actionType = action.raw['action'] as String? ?? 'UNKNOWN';
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Container(
+        decoration: BoxDecoration(
+          color: isLatest
+              ? colorScheme.primaryContainer.withValues(alpha: 0.3)
+              : colorScheme.surfaceContainerHighest,
+          borderRadius: BorderRadius.circular(6),
+          border: isLatest
+              ? Border.all(color: colorScheme.primary.withValues(alpha: 0.4))
+              : null,
+        ),
+        child: ExpansionTile(
+          dense: true,
+          tilePadding: const EdgeInsets.symmetric(horizontal: 10),
+          childrenPadding: const EdgeInsets.fromLTRB(10, 0, 10, 8),
+          // Show the latest action expanded by default
+          initiallyExpanded: isLatest,
+          leading: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+            decoration: BoxDecoration(
+              color: colorScheme.primary.withValues(alpha: 0.1),
+              borderRadius: BorderRadius.circular(4),
+            ),
+            child: Text(
+              '#$index',
+              style: TextStyle(
+                fontSize: 10,
+                fontWeight: FontWeight.bold,
+                color: colorScheme.primary,
+              ),
+            ),
+          ),
+          title: Row(
+            children: [
+              _ActionTypeBadge(actionType: actionType),
+              const SizedBox(width: 6),
+              if (action.fieldId != null)
+                Expanded(
+                  child: Text(
+                    action.fieldId!,
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: colorScheme.onSurfaceVariant,
+                      fontFamily: 'monospace',
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+            ],
+          ),
+          children: [
+            _JsonView(data: action.toJson()),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// A single request entry in the log, with a header showing the index
+/// and a summary, and a collapsible JSON body.
+class _RequestLogEntry extends StatelessWidget {
+  final int index;
+  final Map<String, dynamic> data;
+  final bool isLatest;
+
+  const _RequestLogEntry({
+    required this.index,
+    required this.data,
+    required this.isLatest,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final userMessage = data['user_message'] as String? ?? '';
+    final hasToolResults = data.containsKey('tool_results');
+
+    // Build a short summary for the tile header
+    final String summary;
+    if (hasToolResults) {
+      summary = 'tool_results';
+    } else if (userMessage.isEmpty) {
+      summary = '(init)';
+    } else if (userMessage.length > 40) {
+      summary = '${userMessage.substring(0, 40)}...';
+    } else {
+      summary = userMessage;
+    }
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Container(
+        decoration: BoxDecoration(
+          color: isLatest
+              ? Colors.orange.withValues(alpha: 0.08)
+              : colorScheme.surfaceContainerHighest,
+          borderRadius: BorderRadius.circular(6),
+          border: isLatest
+              ? Border.all(color: Colors.orange.withValues(alpha: 0.4))
+              : null,
+        ),
+        child: ExpansionTile(
+          dense: true,
+          tilePadding: const EdgeInsets.symmetric(horizontal: 10),
+          childrenPadding: const EdgeInsets.fromLTRB(10, 0, 10, 8),
+          initiallyExpanded: isLatest,
+          leading: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+            decoration: BoxDecoration(
+              color: Colors.orange.withValues(alpha: 0.1),
+              borderRadius: BorderRadius.circular(4),
+            ),
+            child: Text(
+              '#$index',
+              style: TextStyle(
+                fontSize: 10,
+                fontWeight: FontWeight.bold,
+                color: Colors.orange.shade800,
+              ),
+            ),
+          ),
+          title: Row(
+            children: [
+              Icon(
+                hasToolResults ? Icons.build_outlined : Icons.send_outlined,
+                size: 12,
+                color: Colors.orange.shade700,
+              ),
+              const SizedBox(width: 6),
+              Expanded(
+                child: Text(
+                  summary,
+                  style: TextStyle(
+                    fontSize: 11,
+                    color: colorScheme.onSurfaceVariant,
+                  ),
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+            ],
+          ),
+          children: [
+            _JsonView(data: data),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// A small colored badge showing the action type.
+class _ActionTypeBadge extends StatelessWidget {
+  final String actionType;
+
+  const _ActionTypeBadge({required this.actionType});
+
+  @override
+  Widget build(BuildContext context) {
+    final (color, icon) = _actionStyle(actionType);
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.15),
+        borderRadius: BorderRadius.circular(4),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 11, color: color),
+          const SizedBox(width: 3),
+          Text(
+            actionType,
+            style: TextStyle(
+              fontSize: 10,
+              fontWeight: FontWeight.w600,
+              color: color,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Map action type to a color and icon for visual distinction.
+  static (Color, IconData) _actionStyle(String type) {
+    return switch (type) {
+      'MESSAGE' => (Colors.blue, Icons.chat_bubble_outline),
+      'ASK_TEXT' => (Colors.teal, Icons.text_fields),
+      'ASK_DROPDOWN' => (Colors.deepPurple, Icons.arrow_drop_down_circle_outlined),
+      'ASK_CHECKBOX' => (Colors.indigo, Icons.check_box_outlined),
+      'ASK_DATE' => (Colors.orange, Icons.calendar_today),
+      'ASK_DATETIME' => (Colors.orange, Icons.access_time),
+      'ASK_LOCATION' => (Colors.green, Icons.location_on_outlined),
+      'TOOL_CALL' => (Colors.amber.shade800, Icons.build_outlined),
+      'FORM_COMPLETE' => (Colors.green.shade700, Icons.check_circle_outline),
+      _ => (Colors.grey, Icons.help_outline),
+    };
   }
 }
 

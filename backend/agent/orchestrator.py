@@ -15,15 +15,21 @@ Flow per user message:
 
 import json
 import logging
+import re
+from datetime import date, datetime
 from typing import Any
 
+from dateutil import parser as dateutil_parser
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 from backend.agent.prompts import (
     build_extraction_prompt,
     build_system_prompt,
+    extract_field_type_map,
+    extract_form_title,
     extract_required_field_ids,
+    summarize_required_fields,
 )
 from backend.core.actions import build_message_action
 
@@ -103,6 +109,132 @@ def _extract_options_hint(tool_data: dict) -> str:
     return ""
 
 
+# ---------------------------------------------------------------------------
+# Answer validation — validates user answers before storing
+# ---------------------------------------------------------------------------
+
+
+def validate_date_answer(value: str) -> tuple[bool, str]:
+    """Validate that a string is a recognizable date.
+
+    Checks for clearly invalid patterns (nonsense strings, impossible
+    month/day values) before falling back to dateutil parsing.
+
+    Args:
+        value: The user-provided date string.
+
+    Returns:
+        A tuple of (is_valid, error_message). error_message is empty if valid.
+    """
+    stripped = value.strip()
+    if not stripped:
+        return False, "Date cannot be empty."
+
+    # Reject strings that are purely alphabetic with no digits —
+    # these are clearly not dates (e.g. "sdasdsdad")
+    if not any(ch.isdigit() for ch in stripped):
+        return False, f"'{stripped}' is not a valid date. Please provide a date like 2026-01-15 or January 15, 2026."
+
+    try:
+        parsed = dateutil_parser.parse(stripped, dayfirst=False)
+        # Extra sanity: reject dates with impossible month/day that
+        # dateutil might silently swap or misparse
+        if not isinstance(parsed.date(), date):
+            raise ValueError
+        return True, ""
+    except (ValueError, TypeError, OverflowError):
+        return False, f"'{stripped}' is not a valid date. Please provide a date like 2026-01-15 or January 15, 2026."
+
+
+def validate_datetime_answer(value: str) -> tuple[bool, str]:
+    """Validate that a string is a recognizable datetime.
+
+    Args:
+        value: The user-provided datetime string.
+
+    Returns:
+        A tuple of (is_valid, error_message).
+    """
+    stripped = value.strip()
+    if not stripped:
+        return False, "Datetime cannot be empty."
+
+    if not any(ch.isdigit() for ch in stripped):
+        return False, f"'{stripped}' is not a valid date/time. Please provide something like 2026-01-15 10:30 AM."
+
+    try:
+        parsed = dateutil_parser.parse(stripped, dayfirst=False)
+        if not isinstance(parsed, datetime):
+            raise ValueError
+        return True, ""
+    except (ValueError, TypeError, OverflowError):
+        return False, f"'{stripped}' is not a valid date/time. Please provide something like 2026-01-15 10:30 AM."
+
+
+def validate_time_answer(value: str) -> tuple[bool, str]:
+    """Validate that a string is a recognizable time value.
+
+    Accepts common time formats: "10 AM", "10:30", "2:45 PM", "14:00", etc.
+
+    Args:
+        value: The user-provided time string.
+
+    Returns:
+        A tuple of (is_valid, error_message).
+    """
+    stripped = value.strip()
+    if not stripped:
+        return False, "Time cannot be empty."
+
+    # Reject strings that are purely alphabetic with no digits
+    if not any(ch.isdigit() for ch in stripped):
+        return False, f"'{stripped}' is not a valid time. Please provide a time like 10:30 AM or 14:00."
+
+    # Try common time patterns
+    time_patterns = [
+        r"^\d{1,2}:\d{2}\s*(AM|PM|am|pm)?$",       # 10:30 AM, 14:00
+        r"^\d{1,2}\s*(AM|PM|am|pm)$",                # 10 AM, 2 PM
+        r"^\d{1,2}:\d{2}:\d{2}\s*(AM|PM|am|pm)?$",  # 10:30:00 AM
+    ]
+    for pattern in time_patterns:
+        if re.match(pattern, stripped):
+            return True, ""
+
+    # Fallback: try dateutil — if it can parse a time component, accept it
+    try:
+        parsed = dateutil_parser.parse(stripped, dayfirst=False)
+        # If it parsed successfully, it at least has a time component
+        return True, ""
+    except (ValueError, TypeError, OverflowError):
+        pass
+
+    return False, f"'{stripped}' is not a valid time. Please provide a time like 10:30 AM or 14:00."
+
+
+def validate_answer_for_action(
+    action_type: str, value: str
+) -> tuple[bool, str]:
+    """Validate a user's answer based on the ASK_* action type.
+
+    Only validates types that have a clear expected format (dates, times).
+    Text fields are accepted as-is since the LLM handles content validation.
+
+    Args:
+        action_type: The ASK_* action type (e.g. "ASK_DATE").
+        value: The user's raw answer string.
+
+    Returns:
+        A tuple of (is_valid, error_message).
+    """
+    if action_type == "ASK_DATE":
+        return validate_date_answer(value)
+    elif action_type == "ASK_DATETIME":
+        return validate_datetime_answer(value)
+    # Note: ASK_TEXT for time fields (e.g. injuryTime) is validated by
+    # the LLM prompt, not here, since ASK_TEXT is generic.
+    return True, ""
+
+
 class FormOrchestrator:
     """Orchestrates a markdown-driven form-filling conversation.
 
@@ -127,26 +259,57 @@ class FormOrchestrator:
         # Track the field currently being asked so we can auto-store
         # the user's answer deterministically (don't rely on LLM to echo it)
         self._pending_field_id: str | None = None
+        # Track the action type of the pending field (e.g. ASK_DATE)
+        # so we can validate the user's answer before storing
+        self._pending_action_type: str | None = None
         # Track the last TOOL_CALL so we can guide the LLM after results return
         self._pending_tool_name: str | None = None
         # Extract required field IDs from the markdown for FORM_COMPLETE guard
         self._required_fields: list[str] = extract_required_field_ids(
             form_context_md
         )
+        # Extract field type map (field_id -> type string) for answer validation
+        self._field_types: dict[str, str] = extract_field_type_map(
+            form_context_md
+        )
 
     def get_initial_action(self) -> dict:
-        """Get the first action — a greeting asking the user to describe their data.
+        """Get the first action — a friendly greeting with form name and data summary.
+
+        Extracts the form title and required field labels from the markdown
+        to build a warm, informative greeting that helps the user understand
+        what data is needed upfront.
 
         Returns:
             A MESSAGE action dict with the greeting.
         """
-        greeting = (
-            "Hello! I'm FormPilot AI, your form-filling assistant. "
-            "Please describe all the information you'd like to fill in, "
-            "and I'll take care of the rest. You can tell me everything at once!"
-        )
+        greeting = self._build_greeting()
         self._add_history("assistant", greeting)
         return build_message_action(greeting)
+
+    def _build_greeting(self) -> str:
+        """Build a friendly, conversational greeting with form name and data summary."""
+        form_title = extract_form_title(self.form_context_md)
+        summary = summarize_required_fields(self.form_context_md)
+
+        if summary:
+            greeting = (
+                f"Hi there! I'm FormPilot AI, and I'll be helping you fill out "
+                f"the **{form_title}** form.\n\n"
+                f"{summary}.\n\n"
+                f"Feel free to tell me everything you know in one message — "
+                f"I'll extract what I can and only ask about the rest!"
+            )
+        else:
+            greeting = (
+                f"Hi there! I'm FormPilot AI, and I'll be helping you fill out "
+                f"the **{form_title}** form.\n\n"
+                f"Go ahead and describe all the information you have — "
+                f"I'll take care of filling in the form and only ask about "
+                f"anything that's missing!"
+            )
+
+        return greeting
 
     async def process_user_message(
         self,
@@ -189,15 +352,44 @@ class FormOrchestrator:
             self._pending_tool_name = None
 
         # Auto-store answer: if we were asking a field and the user responded
-        # (not a tool result), store their answer deterministically
+        # (not a tool result), validate and store their answer deterministically
         if self._pending_field_id and user_message.strip() and not tool_results:
-            self.answers[self._pending_field_id] = user_message.strip()
-            logger.info(
-                "Auto-stored answer: %s = %s",
-                self._pending_field_id,
-                user_message.strip()[:100],
+            raw_answer = user_message.strip()
+            # Validate the answer based on the action type (e.g. ASK_DATE)
+            is_valid, validation_error = validate_answer_for_action(
+                self._pending_action_type or "", raw_answer
             )
-            self._pending_field_id = None
+            if is_valid:
+                self.answers[self._pending_field_id] = raw_answer
+                logger.info(
+                    "Auto-stored answer: %s = %s",
+                    self._pending_field_id,
+                    raw_answer[:100],
+                )
+                self._pending_field_id = None
+                self._pending_action_type = None
+            else:
+                # Validation failed — don't store, keep pending field so
+                # the LLM re-asks. Inject a validation error into history
+                # so the LLM knows to ask again with a helpful message.
+                logger.warning(
+                    "Validation failed for %s (%s): %s",
+                    self._pending_field_id,
+                    self._pending_action_type,
+                    validation_error,
+                )
+                self._add_history("user", user_message)
+                self._add_history(
+                    "user",
+                    f"[SYSTEM: The user's answer '{raw_answer}' for field "
+                    f"'{self._pending_field_id}' is INVALID. {validation_error} "
+                    f"You MUST re-ask this field using {self._pending_action_type} "
+                    f"with field_id '{self._pending_field_id}'. "
+                    f"Tell the user their input was not valid and ask again.]",
+                )
+                # Don't clear _pending_field_id — the LLM will re-ask
+                # Skip adding user_message again (already added above)
+                return await self._process_conversation()
 
         # Add the user message to history (skip if empty and we have tool results)
         if user_message.strip():
@@ -235,12 +427,28 @@ class FormOrchestrator:
             # Extraction failed — fall back to normal conversation
             return await self._process_conversation()
 
-        # If LLM returned multi_answer, store the answers
+        # If LLM returned multi_answer, validate and store the answers
         intent = parsed.get("intent")
         if intent == "multi_answer":
             answers = parsed.get("answers", {})
             if isinstance(answers, dict):
-                self.answers.update(answers)
+                # Validate extracted answers before storing
+                validated = {}
+                rejected_fields = []
+                for field_id, value in answers.items():
+                    field_type = self._field_types.get(field_id, "")
+                    if field_type in ("date", "datetime") and isinstance(value, str):
+                        action = "ASK_DATE" if field_type == "date" else "ASK_DATETIME"
+                        is_valid, err = validate_answer_for_action(action, value)
+                        if not is_valid:
+                            logger.warning(
+                                "Extraction rejected %s = '%s': %s",
+                                field_id, value, err,
+                            )
+                            rejected_fields.append(field_id)
+                            continue
+                    validated[field_id] = value
+                self.answers.update(validated)
 
             llm_message = parsed.get("message", "")
             if llm_message:
@@ -312,14 +520,17 @@ class FormOrchestrator:
         # will be auto-stored as the answer for this field
         if action_type.startswith("ASK_") and field_id:
             self._pending_field_id = field_id
+            self._pending_action_type = action_type
             self._pending_tool_name = None
-            logger.info("Now asking field: %s", field_id)
+            logger.info("Now asking field: %s (type: %s)", field_id, action_type)
         elif action_type == "TOOL_CALL":
             self._pending_tool_name = parsed.get("tool_name")
             self._pending_field_id = None
+            self._pending_action_type = None
             logger.info("Pending tool call: %s", self._pending_tool_name)
         else:
             self._pending_field_id = None
+            self._pending_action_type = None
             self._pending_tool_name = None
 
         # If FORM_COMPLETE, make sure we have the data
