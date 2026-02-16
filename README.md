@@ -86,7 +86,7 @@ form_pilot_ai/
 
 - Python 3.12+
 - Flutter SDK (web enabled)
-- An LLM API key (OpenAI, Azure OpenAI, watsonx, or any OpenAI-compatible endpoint)
+- An OpenAI-compatible LLM endpoint (e.g. GOSI Brain, Ollama, vLLM, or any OpenAI-compatible API)
 
 ### Backend
 
@@ -174,23 +174,20 @@ This approach minimizes back-and-forth by capturing as much data as possible fro
 | `TOOL_CALL` | Request frontend to execute a tool (e.g. data lookup) |
 | `FORM_COMPLETE` | All fields collected; final data payload for review |
 
-## Supported LLM Providers
+## LLM Configuration
 
-| Provider | Environment Variables |
-|----------|----------------------|
-| OpenAI | `OPENAI_API_KEY`, `OPENAI_MODEL_NAME` |
-| Azure OpenAI | `AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_DEPLOYMENT_NAME` |
-| watsonx | `WATSONX_API_KEY`, `WATSONX_URL`, `WATSONX_PROJECT_ID`, `WATSONX_MODEL_ID` |
-| Custom (OpenAI-compatible) | `CUSTOM_LLM_API_ENDPOINT`, `CUSTOM_LLM_API_KEY`, `CUSTOM_LLM_MODEL_NAME` |
-
-### Custom Provider
-
-The `custom` provider supports any LLM endpoint that follows the OpenAI Chat Completions API format. This includes:
+FormPilot AI works with any **OpenAI-compatible** chat completions endpoint. This includes:
 - Company-hosted platforms like **GOSI Brain**
 - Local models via **Ollama** (e.g. `http://localhost:11434/v1/chat/completions`)
-- Any OpenAI-compatible endpoint
+- **vLLM**, **LiteLLM**, or any OpenAI-compatible API
 
-Set `LLM_PROVIDER=custom` and configure the endpoint, API key, and model name. Under the hood, it uses LangChain's `ChatOpenAI` with a custom `base_url`.
+| Environment Variable | Description |
+|----------------------|-------------|
+| `CUSTOM_LLM_API_ENDPOINT` | Full URL of the chat completions endpoint |
+| `CUSTOM_LLM_API_KEY` | API key / bearer token |
+| `CUSTOM_LLM_MODEL_NAME` | Model identifier (defaults to `"default"`) |
+
+Under the hood, it uses LangChain's `ChatOpenAI` with a custom `base_url`.
 
 ## API Endpoints
 

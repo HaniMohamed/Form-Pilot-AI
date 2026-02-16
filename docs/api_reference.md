@@ -257,7 +257,9 @@ The backend is configured via environment variables. See `.env.example` for all 
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `LLM_PROVIDER` | `openai` | LLM provider: `openai`, `azure_openai`, `watsonx`, `custom` |
+| `CUSTOM_LLM_API_ENDPOINT` | *(required)* | OpenAI-compatible chat completions URL |
+| `CUSTOM_LLM_API_KEY` | *(required)* | API key / bearer token |
+| `CUSTOM_LLM_MODEL_NAME` | `default` | Model identifier |
 | `SESSION_TIMEOUT_SECONDS` | `1800` | Session expiry time (30 minutes) |
 | `CORS_ALLOWED_ORIGINS` | `*` | Comma-separated allowed origins |
 | `BACKEND_HOST` | `0.0.0.0` | Server host |

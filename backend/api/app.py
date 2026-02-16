@@ -49,16 +49,14 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
-    # Initialize LLM provider
-    provider = os.getenv("LLM_PROVIDER", "openai")
+    # Initialize LLM (OpenAI-compatible endpoint)
     try:
-        llm = get_llm(provider)
-        logger.info("LLM provider initialized: %s", provider)
+        llm = get_llm()
+        logger.info("LLM initialized: %s", os.getenv("CUSTOM_LLM_API_ENDPOINT", "not set"))
     except Exception as e:
         logger.warning(
-            "Failed to initialize LLM provider '%s': %s. "
+            "Failed to initialize LLM: %s. "
             "The /chat endpoint will fail until a valid LLM is configured.",
-            provider,
             e,
         )
         llm = None
@@ -74,7 +72,7 @@ def create_app() -> FastAPI:
     @application.on_event("startup")
     async def on_startup():
         logger.info("FormPilot AI backend starting up")
-        logger.info("LLM Provider: %s", provider)
+        logger.info("LLM endpoint: %s", os.getenv("CUSTOM_LLM_API_ENDPOINT", "not set"))
         logger.info("Session timeout: %d seconds", session_timeout)
 
     return application

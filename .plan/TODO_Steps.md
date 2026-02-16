@@ -10,7 +10,7 @@
 - [ ] **0.1** Initialize the Python backend project structure
   - [ ] Create project root directories: `backend/`, `backend/core/`, `backend/agent/`, `backend/api/`, `backend/tests/`, `backend/schemas/`
   - [ ] Create `backend/requirements.txt` with pinned dependencies:
-    - `langchain`, `langchain-openai`, `langchain-ibm` (watsonx)
+    - `langchain`, `langchain-openai`
     - `pydantic`
     - `python-dateutil`
     - `pytest`
@@ -26,10 +26,10 @@
   - [ ] Run `flutter pub get`
 - [ ] **0.3** Set up environment configuration
   - [ ] Create `.env.example` with placeholders for:
-    - `LLM_PROVIDER` (watsonx / openai / azure_openai)
+    - `CUSTOM_LLM_API_ENDPOINT`, `CUSTOM_LLM_API_KEY`, `CUSTOM_LLM_MODEL_NAME`
     - `LLM_API_KEY`
     - `LLM_MODEL_NAME`
-    - `LLM_ENDPOINT` (for watsonx / Azure)
+    - `CUSTOM_LLM_API_ENDPOINT`
     - `BACKEND_HOST` / `BACKEND_PORT`
   - [ ] Create `.gitignore` covering Python (`__pycache__`, `.env`, `venv/`) and Flutter Web (`.dart_tool/`, `build/`)
 
@@ -182,11 +182,7 @@
 
 - [ ] **5.1** Configure the LLM provider abstraction
   - [ ] Create `backend/agent/llm_provider.py`
-  - [ ] Implement factory function `get_llm(provider: str, **kwargs)` supporting:
-    - `openai` → `ChatOpenAI`
-    - `azure_openai` → `AzureChatOpenAI`
-    - `watsonx` → `WatsonxLLM` from `langchain_ibm`
-    - `custom` → `ChatOpenAI` with custom `base_url` (OpenAI-compatible endpoints like GOSI Brain)
+  - [ ] Implement factory function `get_llm(**kwargs)` using `ChatOpenAI` with custom `base_url` (any OpenAI-compatible endpoint)
   - [ ] Load credentials from environment variables
   - [ ] Set sensible defaults: `temperature=0`, `max_tokens=1024`
 - [ ] **5.2** Design the system prompt

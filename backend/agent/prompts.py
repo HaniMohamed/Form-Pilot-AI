@@ -31,6 +31,51 @@ _KEY_SECTIONS = [
 ]
 
 
+def extract_required_field_ids(form_context_md: str) -> list[str]:
+    """Extract required field IDs from the Field Summary Table in the markdown.
+
+    Parses the markdown table looking for rows where the "Required" column
+    says "Yes". Returns the field IDs in order.
+
+    Args:
+        form_context_md: The markdown form definition.
+
+    Returns:
+        List of required field_id strings (e.g. ["selectedEstablishment", ...]).
+    """
+    required: list[str] = []
+    in_table = False
+
+    for line in form_context_md.splitlines():
+        stripped = line.strip()
+        # Detect start of Field Summary Table (header row with "Field ID")
+        if "Field ID" in stripped and "Required" in stripped and "|" in stripped:
+            in_table = True
+            continue
+        # Skip separator row (|---|---|...)
+        if in_table and stripped.startswith("|") and "---" in stripped:
+            continue
+        # Parse table rows
+        if in_table and stripped.startswith("|"):
+            cells = [c.strip() for c in stripped.split("|")]
+            # Filter empty strings from split (leading/trailing pipes)
+            cells = [c for c in cells if c]
+            if len(cells) >= 4:
+                field_id_raw = cells[1]  # Second column: Field ID
+                required_raw = cells[3]  # Fourth column: Required
+                # Extract field_id from backticks if present
+                field_id = field_id_raw.strip("`").strip()
+                # Check if required is "Yes"
+                if required_raw.strip().lower().startswith("yes"):
+                    if field_id and field_id != "Document Uploads":
+                        required.append(field_id)
+        elif in_table and not stripped.startswith("|"):
+            # End of table
+            break
+
+    return required
+
+
 def condense_form_context(form_context_md: str) -> str:
     """Condense a large form markdown to just the essential sections.
 
@@ -137,8 +182,10 @@ AVAILABLE JSON RESPONSES (pick exactly one):
 
 RULES:
 - Ask ONE field at a time. Follow the form field order.
+- NEVER re-ask a field that is already in the ALREADY ANSWERED list below. Move to the NEXT unanswered field.
 - NEVER fabricate or assume values. Only use what the user provides.
 - CRITICAL: If a field says "TOOL_CALL FIRST" in the form, you MUST return a TOOL_CALL to fetch the data BEFORE asking the user. NEVER return ASK_DROPDOWN with empty options [].
+- CRITICAL: NEVER use MESSAGE to ask the user for field data. Use ASK_TEXT for text/time fields, ASK_DATE for dates, ASK_DROPDOWN for dropdowns, etc. MESSAGE is ONLY for greetings or informational text, NOT for asking questions.
 - When the app returns tool results, use that data to present real options.
 - Respond in the same language the user speaks.
 - If the user corrects a previous answer, accept the correction.
@@ -160,6 +207,12 @@ You: {{"action": "ASK_DROPDOWN", "field_id": "selectedEstablishment", "label": "
 
 User: "Company A"
 You: {{"action": "ASK_DATE", "field_id": "injuryDate", "label": "When did the injury occur?", "message": "When did the injury happen? Please provide the date."}}
+
+User: "2026-02-01"
+You: {{"action": "ASK_TEXT", "field_id": "injuryTime", "label": "What time did the injury occur?", "message": "What time did the injury happen?"}}
+
+User: "10am"
+You: {{"action": "ASK_TEXT", "field_id": "injuryOccurred", "label": "Describe the injury", "message": "Please describe what happened."}}
 
 === FORM REFERENCE DATA ===
 {form_context_md}
@@ -211,6 +264,7 @@ def build_system_prompt(
     form_context_md: str,
     answers: dict[str, Any],
     conversation_history: list[dict] | None = None,
+    required_fields: list[str] | None = None,
 ) -> str:
     """Build the system prompt with condensed form context and current state.
 
@@ -219,7 +273,12 @@ def build_system_prompt(
     """
     condensed = condense_form_context(form_context_md)
     state_context = _build_state_context(answers)
-    next_step_hint = _build_next_step_hint(answers, conversation_history)
+    # If required_fields not provided, extract them from the markdown
+    if required_fields is None:
+        required_fields = extract_required_field_ids(form_context_md)
+    next_step_hint = _build_next_step_hint(
+        answers, conversation_history, required_fields
+    )
     return SYSTEM_PROMPT_TEMPLATE.format(
         form_context_md=condensed,
         state_context=state_context,
@@ -254,6 +313,7 @@ def _build_state_context(answers: dict[str, Any]) -> str:
 def _build_next_step_hint(
     answers: dict[str, Any],
     conversation_history: list[dict] | None = None,
+    required_fields: list[str] | None = None,
 ) -> str:
     """Build a directive hint telling the LLM what to do next.
 
@@ -282,11 +342,36 @@ def _build_next_step_hint(
             "Do NOT return ASK_DROPDOWN with empty options."
         )
 
-    # Some answers exist — tell the model to find the next unanswered field
+    # Some answers exist — explicitly list answered fields and forbid re-asking
+    answered_list = "\n".join(
+        f"  - {fid} = {val}" for fid, val in answers.items()
+    )
     answered_ids = ", ".join(answers.keys())
+
+    # Build list of still-missing required fields
+    missing_hint = ""
+    if required_fields:
+        missing = [fid for fid in required_fields if fid not in answers]
+        if missing:
+            missing_list = ", ".join(missing)
+            next_field = missing[0]
+            missing_hint = (
+                f"\n\nSTILL REQUIRED (you MUST ask these before FORM_COMPLETE):\n"
+                f"  [{missing_list}]\n"
+                f"  Total remaining: {len(missing)} fields\n"
+                f"  NEXT field to ask: {next_field}"
+            )
+        else:
+            missing_hint = (
+                "\n\nAll required fields are answered. You may return FORM_COMPLETE."
+            )
+
     return (
-        f"YOUR NEXT ACTION: Fields already answered: [{answered_ids}]. "
-        "Look at the form definition to find the NEXT required field that "
-        "is NOT yet answered. If it needs data from the app, return a TOOL_CALL. "
-        "If all required fields are complete, return FORM_COMPLETE with all the data."
+        f"ALREADY ANSWERED (do NOT ask these again):\n{answered_list}\n\n"
+        f"YOUR NEXT ACTION: Skip all answered fields ({answered_ids}). "
+        "Find the NEXT field in the Field Summary Table that is NOT in the "
+        "answered list above. If it needs a TOOL_CALL, call the tool. "
+        "If it has static options, use ASK_DROPDOWN with those options. "
+        "Do NOT return FORM_COMPLETE until ALL required fields are answered."
+        f"{missing_hint}"
     )

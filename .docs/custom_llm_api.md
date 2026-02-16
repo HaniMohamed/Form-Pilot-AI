@@ -2,7 +2,7 @@
 
 ## Overview
 
-The application supports a **Custom API** provider (in addition to Ollama) that communicates with any OpenAI-compatible chat completions endpoint. The implementation lives in `models.py` via the `UnifiedLLM` class.
+The application communicates with any **OpenAI-compatible** chat completions endpoint. The implementation lives in `backend/agent/llm_provider.py` using LangChain's `ChatOpenAI` with a custom `base_url`.
 
 ## Configuration
 
