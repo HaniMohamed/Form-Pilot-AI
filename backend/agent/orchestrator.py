@@ -262,6 +262,13 @@ class FormOrchestrator:
         # Track the action type of the pending field (e.g. ASK_DATE)
         # so we can validate the user's answer before storing
         self._pending_action_type: str | None = None
+        # Hold text answers pending LLM contextual validation.
+        # For ASK_TEXT fields we can't validate format — the LLM must judge
+        # whether the answer is relevant to the question. The value is held
+        # here until the LLM either accepts (moves to next field) or rejects
+        # (re-asks the same field).
+        self._pending_text_value: str | None = None
+        self._pending_text_field_id: str | None = None
         # Track the last TOOL_CALL so we can guide the LLM after results return
         self._pending_tool_name: str | None = None
         # Extract required field IDs from the markdown for FORM_COMPLETE guard
@@ -352,44 +359,85 @@ class FormOrchestrator:
             self._pending_tool_name = None
 
         # Auto-store answer: if we were asking a field and the user responded
-        # (not a tool result), validate and store their answer deterministically
+        # (not a tool result), validate and store their answer deterministically.
+        #
+        # Two validation strategies:
+        # 1. Format validation (ASK_DATE, ASK_DATETIME): deterministic check
+        #    before storing — reject immediately if format is wrong.
+        # 2. Context validation (ASK_TEXT): hold the answer and let the LLM
+        #    judge if it's relevant to the question. The LLM either accepts
+        #    (moves to next field) or rejects (re-asks same field).
         if self._pending_field_id and user_message.strip() and not tool_results:
             raw_answer = user_message.strip()
-            # Validate the answer based on the action type (e.g. ASK_DATE)
-            is_valid, validation_error = validate_answer_for_action(
-                self._pending_action_type or "", raw_answer
-            )
-            if is_valid:
-                self.answers[self._pending_field_id] = raw_answer
+
+            if self._pending_action_type == "ASK_TEXT":
+                # --- Context validation path (LLM decides) ---
+                # Don't store yet — hold the value for LLM validation.
+                self._pending_text_value = raw_answer
+                self._pending_text_field_id = self._pending_field_id
                 logger.info(
-                    "Auto-stored answer: %s = %s",
+                    "Holding text answer for LLM validation: %s = %s",
                     self._pending_field_id,
                     raw_answer[:100],
                 )
-                self._pending_field_id = None
-                self._pending_action_type = None
-            else:
-                # Validation failed — don't store, keep pending field so
-                # the LLM re-asks. Inject a validation error into history
-                # so the LLM knows to ask again with a helpful message.
-                logger.warning(
-                    "Validation failed for %s (%s): %s",
-                    self._pending_field_id,
-                    self._pending_action_type,
-                    validation_error,
-                )
+                # Add user message + validation directive to history
                 self._add_history("user", user_message)
                 self._add_history(
                     "user",
-                    f"[SYSTEM: The user's answer '{raw_answer}' for field "
-                    f"'{self._pending_field_id}' is INVALID. {validation_error} "
-                    f"You MUST re-ask this field using {self._pending_action_type} "
-                    f"with field_id '{self._pending_field_id}'. "
-                    f"Tell the user their input was not valid and ask again.]",
+                    f"[SYSTEM: The user answered '{raw_answer}' for field "
+                    f"'{self._pending_field_id}'. "
+                    f"VALIDATE this answer: Is it relevant and appropriate for "
+                    f"the question asked? Does it make sense in context? "
+                    f"If YES — proceed to the NEXT unanswered field. "
+                    f"If NO (gibberish, irrelevant, nonsensical, or clearly "
+                    f"wrong context) — re-ask the SAME field "
+                    f"'{self._pending_field_id}' using ASK_TEXT. "
+                    f"Politely tell the user why their answer doesn't fit "
+                    f"and ask again in a clearer way.]",
                 )
-                # Don't clear _pending_field_id — the LLM will re-ask
+                self._pending_field_id = None
+                self._pending_action_type = None
                 # Skip adding user_message again (already added above)
                 return await self._process_conversation()
+            else:
+                # --- Format validation path (deterministic check) ---
+                is_valid, validation_error = validate_answer_for_action(
+                    self._pending_action_type or "", raw_answer
+                )
+                if is_valid:
+                    self.answers[self._pending_field_id] = raw_answer
+                    logger.info(
+                        "Auto-stored answer: %s = %s",
+                        self._pending_field_id,
+                        raw_answer[:100],
+                    )
+                    self._pending_field_id = None
+                    self._pending_action_type = None
+                else:
+                    # Validation failed — don't store, keep pending field so
+                    # the LLM re-asks. Inject a validation error into history
+                    # so the LLM knows to ask again with a helpful message.
+                    logger.warning(
+                        "Validation failed for %s (%s): %s",
+                        self._pending_field_id,
+                        self._pending_action_type,
+                        validation_error,
+                    )
+                    self._add_history("user", user_message)
+                    self._add_history(
+                        "user",
+                        f"[SYSTEM: The user's answer '{raw_answer}' for field "
+                        f"'{self._pending_field_id}' is INVALID. "
+                        f"{validation_error} "
+                        f"You MUST re-ask this field using "
+                        f"{self._pending_action_type} "
+                        f"with field_id '{self._pending_field_id}'. "
+                        f"Tell the user their input was not valid and "
+                        f"ask again.]",
+                    )
+                    # Don't clear _pending_field_id — the LLM will re-ask
+                    # Skip adding user_message again (already added above)
+                    return await self._process_conversation()
 
         # Add the user message to history (skip if empty and we have tool results)
         if user_message.strip():
@@ -501,6 +549,7 @@ class FormOrchestrator:
 
         Tracks the pending field for deterministic answer storage,
         and records the assistant message in conversation history.
+        Also resolves pending text answers awaiting LLM contextual validation.
 
         Args:
             parsed: The parsed JSON action from the LLM.
@@ -510,6 +559,33 @@ class FormOrchestrator:
         """
         action_type = parsed.get("action", "")
         field_id = parsed.get("field_id")
+
+        # --- Resolve pending text answer (LLM contextual validation) ---
+        # If we were holding a text answer for LLM validation, check whether
+        # the LLM accepted it (moved to a different field) or rejected it
+        # (re-asked the same field).
+        if self._pending_text_value and self._pending_text_field_id:
+            is_reask = (
+                action_type.startswith("ASK_")
+                and field_id == self._pending_text_field_id
+            )
+            if is_reask:
+                # LLM rejected the answer — discard it
+                logger.info(
+                    "LLM rejected text answer for '%s' — discarding",
+                    self._pending_text_field_id,
+                )
+            else:
+                # LLM accepted — commit the held answer
+                self.answers[self._pending_text_field_id] = self._pending_text_value
+                logger.info(
+                    "LLM accepted text answer: %s = %s",
+                    self._pending_text_field_id,
+                    self._pending_text_value[:100],
+                )
+            # Clear the pending text state regardless
+            self._pending_text_value = None
+            self._pending_text_field_id = None
 
         # If the LLM explicitly set a field value, store it
         value = parsed.get("value")

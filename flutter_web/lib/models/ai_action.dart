@@ -49,10 +49,10 @@ class AIAction {
   String? get fieldId => raw['field_id'] as String?;
 
   /// The label/prompt text (for ASK_* actions).
-  String? get label => raw['label'] as String?;
+  String? get label => (raw['label']?? raw['question'] ?? raw['message']) as String?;
 
   /// The message text (for MESSAGE actions and ASK_* with message).
-  String? get message => raw['message'] as String?;
+  String? get message => (raw['message'] ?? raw['question'] ?? raw['label']) as String?;
 
   /// The text content (for MESSAGE actions).
   String? get text => raw['text'] as String?;
