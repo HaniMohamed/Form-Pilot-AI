@@ -94,8 +94,7 @@ form_pilot_ai/
 │   │   │   ├── conversation.py # LLM conversation turn
 │   │   │   └── finalize.py   # Action post-processing
 │   │   ├── prompts.py        # System prompt templates
-│   │   ├── llm_provider.py   # LLM factory (OpenAI-compatible)
-│   │   └── orchestrator.py   # Compatibility wrapper for tests
+│   │   └── llm_provider.py   # LLM factory (OpenAI-compatible)
 │   ├── api/                  # FastAPI routes
 │   ├── schemas/              # Example form definition markdown files
 │   └── tests/                # Unit and integration tests

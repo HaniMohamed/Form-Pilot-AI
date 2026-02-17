@@ -1,5 +1,5 @@
 """
-Unit tests for the markdown-driven FormOrchestrator.
+Unit tests for the LangGraph-based conversation engine.
 
 Uses a mock LLM to test deterministically without API calls.
 
@@ -17,7 +17,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from backend.agent.orchestrator import FormOrchestrator
+from backend.tests.conftest import GraphRunner
 
 
 # Minimal markdown form context for tests
@@ -106,20 +106,20 @@ class TestInitialAction:
     def test_returns_greeting_message(self):
         """Initial action is a MESSAGE asking user to describe all data."""
         llm = MockLLM()
-        orch = FormOrchestrator(SIMPLE_FORM_MD, llm)
+        runner = GraphRunner(SIMPLE_FORM_MD, llm)
 
-        action = orch.get_initial_action()
+        action = runner.get_initial_action()
         assert action["action"] == "MESSAGE"
         assert "text" in action
         assert "FormPilot AI" in action["text"]
 
     def test_records_in_conversation_history(self):
         llm = MockLLM()
-        orch = FormOrchestrator(SIMPLE_FORM_MD, llm)
+        runner = GraphRunner(SIMPLE_FORM_MD, llm)
 
-        orch.get_initial_action()
-        assert len(orch.conversation_history) == 1
-        assert orch.conversation_history[0]["role"] == "assistant"
+        runner.get_initial_action()
+        assert len(runner.conversation_history) == 1
+        assert runner.conversation_history[0]["role"] == "assistant"
 
 
 # =============================================================
@@ -140,7 +140,7 @@ class TestExtractionPhase:
             {"action": "FORM_COMPLETE", "data": {"name": "Alice", "color": "Blue"},
              "message": "All done!"},
         ])
-        orch = FormOrchestrator(SIMPLE_FORM_MD, llm)
+        orch = GraphRunner(SIMPLE_FORM_MD, llm)
 
         result = await orch.process_user_message("My name is Alice and I like Blue")
         assert orch.answers["name"] == "Alice"
@@ -156,7 +156,7 @@ class TestExtractionPhase:
             {"action": "ASK_TEXT", "field_id": "name", "label": "What is your name?",
              "message": "Let's start with your name."},
         ])
-        orch = FormOrchestrator(SIMPLE_FORM_MD, llm)
+        orch = GraphRunner(SIMPLE_FORM_MD, llm)
 
         result = await orch.process_user_message("hello")
         assert result["action"] == "ASK_TEXT"
@@ -176,7 +176,7 @@ class TestExtractionPhase:
             {"action": "FORM_COMPLETE", "data": {"name": "Alice", "color": "Blue"},
              "message": "All done!"},
         ])
-        orch = FormOrchestrator(SIMPLE_FORM_MD, llm)
+        orch = GraphRunner(SIMPLE_FORM_MD, llm)
 
         assert orch._initial_extraction_done is False
 
@@ -208,7 +208,7 @@ class TestConversationPhase:
              "label": "What is your name?",
              "message": "Please tell me your name."},
         ])
-        orch = FormOrchestrator(SIMPLE_FORM_MD, llm)
+        orch = GraphRunner(SIMPLE_FORM_MD, llm)
 
         # First message triggers extraction + conversation
         result = await orch.process_user_message("hi")
@@ -225,7 +225,7 @@ class TestConversationPhase:
              "label": "Favorite color?", "options": ["Red", "Blue", "Green"],
              "message": "Choose a color."},
         ])
-        orch = FormOrchestrator(SIMPLE_FORM_MD, llm)
+        orch = GraphRunner(SIMPLE_FORM_MD, llm)
 
         result = await orch.process_user_message("My name is Alice")
         assert result["action"] == "ASK_DROPDOWN"
@@ -241,7 +241,7 @@ class TestConversationPhase:
              "data": {"name": "Alice", "color": "Red"},
              "message": "Form complete!"},
         ])
-        orch = FormOrchestrator(SIMPLE_FORM_MD, llm)
+        orch = GraphRunner(SIMPLE_FORM_MD, llm)
 
         result = await orch.process_user_message("Alice, Red")
         assert result["action"] == "FORM_COMPLETE"
@@ -255,7 +255,7 @@ class TestConversationPhase:
              "message": "Got everything."},
             {"action": "FORM_COMPLETE", "message": "All done!"},
         ])
-        orch = FormOrchestrator(SIMPLE_FORM_MD, llm)
+        orch = GraphRunner(SIMPLE_FORM_MD, llm)
 
         result = await orch.process_user_message("Bob, Green")
         assert result["action"] == "FORM_COMPLETE"
@@ -280,7 +280,7 @@ class TestToolCallRoundTrip:
             {"action": "TOOL_CALL", "tool_name": "get_options",
              "tool_args": {}, "message": "Fetching options..."},
         ])
-        orch = FormOrchestrator(TOOL_FORM_MD, llm)
+        orch = GraphRunner(TOOL_FORM_MD, llm)
 
         result = await orch.process_user_message("Start")
         assert result["action"] == "TOOL_CALL"
@@ -302,7 +302,7 @@ class TestToolCallRoundTrip:
              "options": ["Company A", "Company B"],
              "message": "Please select your establishment."},
         ])
-        orch = FormOrchestrator(TOOL_FORM_MD, llm)
+        orch = GraphRunner(TOOL_FORM_MD, llm)
 
         # Initial message triggers extraction + conversation → TOOL_CALL
         r1 = await orch.process_user_message("Start")
@@ -328,7 +328,7 @@ class TestToolCallRoundTrip:
             {"action": "ASK_TEXT", "field_id": "name",
              "label": "Name?", "message": "What's your name?"},
         ])
-        orch = FormOrchestrator(TOOL_FORM_MD, llm)
+        orch = GraphRunner(TOOL_FORM_MD, llm)
 
         await orch.process_user_message("Start")
 
@@ -361,7 +361,7 @@ class TestLLMJsonFailure:
             # Conversation phase
             '{"action": "ASK_TEXT", "field_id": "name", "label": "Name?", "message": "Your name?"}',
         ])
-        orch = FormOrchestrator(SIMPLE_FORM_MD, llm)
+        orch = GraphRunner(SIMPLE_FORM_MD, llm)
 
         result = await orch.process_user_message("hello")
         assert result["action"] == "ASK_TEXT"
@@ -378,7 +378,7 @@ class TestLLMJsonFailure:
             "also not json",
             "nope",
         ])
-        orch = FormOrchestrator(SIMPLE_FORM_MD, llm)
+        orch = GraphRunner(SIMPLE_FORM_MD, llm)
 
         result = await orch.process_user_message("hello")
         assert result["action"] == "MESSAGE"
@@ -387,7 +387,7 @@ class TestLLMJsonFailure:
     @pytest.mark.asyncio
     async def test_llm_exception_returns_fallback(self):
         llm = MockLLMError()
-        orch = FormOrchestrator(SIMPLE_FORM_MD, llm)
+        orch = GraphRunner(SIMPLE_FORM_MD, llm)
 
         result = await orch.process_user_message("hello")
         assert result["action"] == "MESSAGE"
@@ -399,7 +399,7 @@ class TestLLMJsonFailure:
             '```json\n{"intent": "multi_answer", "answers": {"name": "Alice"}, "message": "Got it!"}\n```',
             '{"action": "ASK_DROPDOWN", "field_id": "color", "label": "Color?", "options": ["Red", "Blue", "Green"], "message": "Color?"}',
         ])
-        orch = FormOrchestrator(SIMPLE_FORM_MD, llm)
+        orch = GraphRunner(SIMPLE_FORM_MD, llm)
 
         await orch.process_user_message("Alice")
         assert orch.answers.get("name") == "Alice"
@@ -422,7 +422,7 @@ class TestConversationHistory:
              "options": ["Red", "Blue", "Green"],
              "message": "What color?"},
         ])
-        orch = FormOrchestrator(SIMPLE_FORM_MD, llm)
+        orch = GraphRunner(SIMPLE_FORM_MD, llm)
 
         await orch.process_user_message("Alice")
 
@@ -433,7 +433,7 @@ class TestConversationHistory:
     @pytest.mark.asyncio
     async def test_initial_action_recorded(self):
         llm = MockLLM()
-        orch = FormOrchestrator(SIMPLE_FORM_MD, llm)
+        orch = GraphRunner(SIMPLE_FORM_MD, llm)
 
         orch.get_initial_action()
         assert len(orch.conversation_history) == 1
@@ -450,7 +450,7 @@ class TestConversationHistory:
              "label": "Color?", "options": ["Red", "Blue", "Green"],
              "message": "What color?"},
         ])
-        orch = FormOrchestrator(SIMPLE_FORM_MD, llm)
+        orch = GraphRunner(SIMPLE_FORM_MD, llm)
         orch.get_initial_action()
 
         # After initial: 1 entry
@@ -470,7 +470,7 @@ class TestConversationHistory:
 
 
 class TestAnswerTracking:
-    """Test that answers are tracked by the orchestrator."""
+    """Test that answers are tracked across turns."""
 
     @pytest.mark.asyncio
     async def test_answers_from_extraction(self):
@@ -480,7 +480,7 @@ class TestAnswerTracking:
             {"action": "FORM_COMPLETE", "data": {"name": "Bob", "color": "Red"},
              "message": "Done!"},
         ])
-        orch = FormOrchestrator(SIMPLE_FORM_MD, llm)
+        orch = GraphRunner(SIMPLE_FORM_MD, llm)
 
         await orch.process_user_message("Bob, Red")
         assert orch.get_answers() == {"name": "Bob", "color": "Red"}
@@ -494,7 +494,7 @@ class TestAnswerTracking:
              "label": "Color?", "options": ["Red", "Blue", "Green"],
              "message": "Color?"},
         ])
-        orch = FormOrchestrator(SIMPLE_FORM_MD, llm)
+        orch = GraphRunner(SIMPLE_FORM_MD, llm)
 
         await orch.process_user_message("Alice")
         assert "name" in orch.get_answers()

@@ -8,7 +8,7 @@ Uses mock LLMs to test full multi-turn conversations:
 
 Tests cover:
 - Full form flow with extraction + follow-up
-- Tool call round-trip through the orchestrator
+- Tool call round-trip through the graph
 - All fields extracted in one shot → FORM_COMPLETE
 - Gibberish → clarification
 - Conversation history across turns
@@ -19,7 +19,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from backend.agent.orchestrator import FormOrchestrator
+from backend.tests.conftest import GraphRunner
 
 # Markdown form definitions for tests
 LEAVE_FORM_MD = """
@@ -100,7 +100,7 @@ class TestFullLeaveRequestFlow:
              "message": "All done!"},
         ])
 
-        orch = FormOrchestrator(LEAVE_FORM_MD, llm)
+        orch = GraphRunner(LEAVE_FORM_MD, llm)
 
         # Initial greeting
         initial = orch.get_initial_action()
@@ -141,7 +141,7 @@ class TestFullLeaveRequestFlow:
              "message": "Form complete!"},
         ])
 
-        orch = FormOrchestrator(LEAVE_FORM_MD, llm)
+        orch = GraphRunner(LEAVE_FORM_MD, llm)
         orch.get_initial_action()
 
         result = await orch.process_user_message(
@@ -181,7 +181,7 @@ class TestToolCallFlow:
              "message": "What type of injury?"},
         ])
 
-        orch = FormOrchestrator(TOOL_FORM_MD, llm)
+        orch = GraphRunner(TOOL_FORM_MD, llm)
         orch.get_initial_action()
 
         # User message → extraction → tool call
@@ -235,7 +235,7 @@ class TestToolCallFlow:
              "message": "Select your establishment."},
         ])
 
-        orch = FormOrchestrator(TOOL_FORM_MD, llm)
+        orch = GraphRunner(TOOL_FORM_MD, llm)
         orch.get_initial_action()
 
         # Extraction → tool call 1
@@ -276,7 +276,7 @@ class TestClarificationFlow:
              "message": "What type of leave do you need?"},
         ])
 
-        orch = FormOrchestrator(LEAVE_FORM_MD, llm)
+        orch = GraphRunner(LEAVE_FORM_MD, llm)
         orch.get_initial_action()
 
         result = await orch.process_user_message("asdfjkl;")
@@ -304,7 +304,7 @@ class TestConversationHistory:
              "message": "When does it end?"},
         ])
 
-        orch = FormOrchestrator(LEAVE_FORM_MD, llm)
+        orch = GraphRunner(LEAVE_FORM_MD, llm)
         orch.get_initial_action()
 
         # After initial: 1 entry (greeting)

@@ -7,7 +7,6 @@ LLM call-with-retry helper used by both extraction and conversation nodes.
 
 import json
 import logging
-import re
 from datetime import date, datetime
 from typing import Any
 
@@ -217,51 +216,6 @@ def validate_datetime_answer(value: str) -> tuple[bool, str]:
             f"'{stripped}' is not a valid date/time. "
             "Please provide something like 2026-01-15 10:30 AM."
         )
-
-
-def validate_time_answer(value: str) -> tuple[bool, str]:
-    """Validate that a string is a recognizable time value.
-
-    Accepts common time formats: "10 AM", "10:30", "2:45 PM", "14:00", etc.
-
-    Args:
-        value: The user-provided time string.
-
-    Returns:
-        A tuple of (is_valid, error_message).
-    """
-    stripped = value.strip()
-    if not stripped:
-        return False, "Time cannot be empty."
-
-    # Reject strings that are purely alphabetic with no digits
-    if not any(ch.isdigit() for ch in stripped):
-        return False, (
-            f"'{stripped}' is not a valid time. "
-            "Please provide a time like 10:30 AM or 14:00."
-        )
-
-    # Try common time patterns
-    time_patterns = [
-        r"^\d{1,2}:\d{2}\s*(AM|PM|am|pm)?$",       # 10:30 AM, 14:00
-        r"^\d{1,2}\s*(AM|PM|am|pm)$",                # 10 AM, 2 PM
-        r"^\d{1,2}:\d{2}:\d{2}\s*(AM|PM|am|pm)?$",  # 10:30:00 AM
-    ]
-    for pattern in time_patterns:
-        if re.match(pattern, stripped):
-            return True, ""
-
-    # Fallback: try dateutil — if it can parse a time component, accept it
-    try:
-        dateutil_parser.parse(stripped, dayfirst=False)
-        return True, ""
-    except (ValueError, TypeError, OverflowError):
-        pass
-
-    return False, (
-        f"'{stripped}' is not a valid time. "
-        "Please provide a time like 10:30 AM or 14:00."
-    )
 
 
 def validate_answer_for_action(

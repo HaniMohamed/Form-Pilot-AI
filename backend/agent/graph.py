@@ -2,8 +2,8 @@
 LangGraph definition for the FormPilot AI conversation flow.
 
 Defines the StateGraph with nodes, conditional edges, and compiles it
-into a runnable graph. The graph replaces the monolithic FormOrchestrator
-with an explicit, inspectable state machine.
+into a runnable graph. Models the conversation flow as an explicit,
+inspectable state machine.
 
 Flow:
     START -> route_input -> {greeting, tool_handler, validate_input,
@@ -41,7 +41,7 @@ logger = logging.getLogger(__name__)
 def route_input(state: FormPilotState) -> str:
     """Determine which node to enter based on the current input.
 
-    Routing priority (matches original orchestrator logic):
+    Routing priority:
     1. New session with empty message -> greeting
     2. Tool results present -> tool_handler
     3. Pending field + user answer (no tool results) -> validate_input

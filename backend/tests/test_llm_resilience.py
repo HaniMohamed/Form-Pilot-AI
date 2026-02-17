@@ -1,5 +1,5 @@
 """
-LLM output resilience tests for the markdown-driven orchestrator.
+LLM output resilience tests for the conversation engine.
 
 Tests cover:
 - Malformed JSON responses from LLM (during extraction and conversation)
@@ -15,7 +15,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from backend.agent.orchestrator import FormOrchestrator
+from backend.tests.conftest import GraphRunner
 
 
 LEAVE_FORM_MD = """
@@ -115,7 +115,7 @@ class TestMalformedJson:
             "last nothing",
         ])
 
-        orch = FormOrchestrator(LEAVE_FORM_MD, llm)
+        orch = GraphRunner(LEAVE_FORM_MD, llm)
         orch.get_initial_action()
 
         action = await orch.process_user_message("Hello")
@@ -137,7 +137,7 @@ class TestMalformedJson:
             "nope",
         ])
 
-        orch = FormOrchestrator(LEAVE_FORM_MD, llm)
+        orch = GraphRunner(LEAVE_FORM_MD, llm)
         orch.get_initial_action()
 
         action = await orch.process_user_message("Annual leave")
@@ -158,7 +158,7 @@ class TestMalformedJson:
                         "label": "Start?", "message": "When?"}),
         ])
 
-        orch = FormOrchestrator(LEAVE_FORM_MD, llm)
+        orch = GraphRunner(LEAVE_FORM_MD, llm)
         orch.get_initial_action()
 
         action = await orch.process_user_message("Annual leave")
@@ -179,7 +179,7 @@ class TestMalformedJson:
                         "label": "Start?", "message": "When?"}),
         ])
 
-        orch = FormOrchestrator(LEAVE_FORM_MD, llm)
+        orch = GraphRunner(LEAVE_FORM_MD, llm)
         orch.get_initial_action()
 
         action = await orch.process_user_message("Sick")
@@ -194,7 +194,7 @@ class TestMalformedJson:
             "", "", "",
         ])
 
-        orch = FormOrchestrator(LEAVE_FORM_MD, llm)
+        orch = GraphRunner(LEAVE_FORM_MD, llm)
         orch.get_initial_action()
 
         action = await orch.process_user_message("Hello")
@@ -223,7 +223,7 @@ class TestMalformedJsonConversation:
             "nope",
         ])
 
-        orch = FormOrchestrator(LEAVE_FORM_MD, llm)
+        orch = GraphRunner(LEAVE_FORM_MD, llm)
         orch.get_initial_action()
 
         # Extraction + conversation
@@ -257,7 +257,7 @@ class TestUnexpectedKeys:
              "label": "Start?", "message": "When?"},
         ])
 
-        orch = FormOrchestrator(LEAVE_FORM_MD, llm)
+        orch = GraphRunner(LEAVE_FORM_MD, llm)
         orch.get_initial_action()
 
         await orch.process_user_message("Annual leave")
@@ -272,7 +272,7 @@ class TestUnexpectedKeys:
              "label": "Start?"},
         ])
 
-        orch = FormOrchestrator(LEAVE_FORM_MD, llm)
+        orch = GraphRunner(LEAVE_FORM_MD, llm)
         orch.get_initial_action()
 
         await orch.process_user_message("Annual")
@@ -290,7 +290,7 @@ class TestLLMExceptions:
         """When LLM throws during extraction, should return fallback message."""
         llm = ExceptionLLM("Connection timeout")
 
-        orch = FormOrchestrator(LEAVE_FORM_MD, llm)
+        orch = GraphRunner(LEAVE_FORM_MD, llm)
         orch.get_initial_action()
 
         action = await orch.process_user_message("Hello")
@@ -304,7 +304,7 @@ class TestLLMExceptions:
         """LLM failure should not leave answers in an inconsistent state."""
         llm = ExceptionLLM("Boom")
 
-        orch = FormOrchestrator(LEAVE_FORM_MD, llm)
+        orch = GraphRunner(LEAVE_FORM_MD, llm)
         orch.get_initial_action()
 
         await orch.process_user_message("Hello")
@@ -329,7 +329,7 @@ class TestRetryMechanism:
             },
         )
 
-        orch = FormOrchestrator(LEAVE_FORM_MD, llm)
+        orch = GraphRunner(LEAVE_FORM_MD, llm)
         orch.get_initial_action()
 
         await orch.process_user_message("Annual leave")
@@ -347,7 +347,7 @@ class TestRetryMechanism:
                      "message": "X"},
         )
 
-        orch = FormOrchestrator(LEAVE_FORM_MD, llm)
+        orch = GraphRunner(LEAVE_FORM_MD, llm)
         orch.get_initial_action()
 
         action = await orch.process_user_message("Something")

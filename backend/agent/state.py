@@ -2,8 +2,7 @@
 FormPilot AI graph state definition.
 
 Defines the typed state that flows through all LangGraph nodes.
-Replaces the ad-hoc instance variables on the old FormOrchestrator
-with a single, inspectable TypedDict.
+A single, inspectable TypedDict that tracks all conversation state.
 
 Uses LangGraph reducers for fields that accumulate across nodes:
 - answers: merge semantics (new answers merged into existing)

@@ -1,5 +1,5 @@
 """
-Dedicated tests for the bulk extraction flow in the markdown-driven orchestrator.
+Dedicated tests for the bulk extraction flow in the conversation engine.
 
 Tests cover:
 - User provides ALL data in one message → answers extracted
@@ -13,7 +13,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from backend.agent.orchestrator import FormOrchestrator
+from backend.tests.conftest import GraphRunner
 
 
 LEAVE_FORM_MD = """
@@ -73,7 +73,7 @@ class TestCompleteExtractionOneShot:
              "message": "Form complete!"},
         ])
 
-        orch = FormOrchestrator(LEAVE_FORM_MD, llm)
+        orch = GraphRunner(LEAVE_FORM_MD, llm)
         orch.get_initial_action()
 
         result = await orch.process_user_message(
@@ -103,7 +103,7 @@ class TestPartialExtraction:
              "message": "When does your leave start?"},
         ])
 
-        orch = FormOrchestrator(LEAVE_FORM_MD, llm)
+        orch = GraphRunner(LEAVE_FORM_MD, llm)
         orch.get_initial_action()
 
         result = await orch.process_user_message("I need sick leave")
@@ -131,7 +131,7 @@ class TestGibberishExtraction:
              "message": "What type of leave do you need?"},
         ])
 
-        orch = FormOrchestrator(LEAVE_FORM_MD, llm)
+        orch = GraphRunner(LEAVE_FORM_MD, llm)
         orch.get_initial_action()
 
         result = await orch.process_user_message("asdfghjkl qwerty")
@@ -158,7 +158,7 @@ class TestExtractionBadFormat:
              "message": "What type of leave?"},
         ])
 
-        orch = FormOrchestrator(LEAVE_FORM_MD, llm)
+        orch = GraphRunner(LEAVE_FORM_MD, llm)
         orch.get_initial_action()
 
         result = await orch.process_user_message("test")
@@ -179,7 +179,7 @@ class TestExtractionBadFormat:
              "label": "End?", "message": "When does it end?"},
         ])
 
-        orch = FormOrchestrator(LEAVE_FORM_MD, llm)
+        orch = GraphRunner(LEAVE_FORM_MD, llm)
         orch.get_initial_action()
 
         assert orch._initial_extraction_done is False
