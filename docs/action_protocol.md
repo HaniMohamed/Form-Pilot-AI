@@ -284,4 +284,4 @@ The LLM internally uses these intents to decide what action to return:
 | `clarify` | Follow-up | User message is unclear, ask for clarification |
 | `ask` | Follow-up | Present the next field question |
 
-These intents are internal to the orchestrator — the Flutter app only sees the action types listed above.
+These intents are internal to the LangGraph state machine — the Flutter app only sees the action types listed above.

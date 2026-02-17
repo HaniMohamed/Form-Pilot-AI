@@ -162,12 +162,7 @@ List available example form definition files from `backend/schemas/`.
     {
       "filename": "form_pilot_report_injury.md",
       "title": "Report Occupational Injury",
-      "size": 4532
-    },
-    {
-      "filename": "leave_request.md",
-      "title": "Leave Request",
-      "size": 2100
+      "size": 26740
     }
   ]
 }

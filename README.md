@@ -82,6 +82,8 @@ The AI can request tool calls from the frontend (e.g. to fetch dropdown options 
 form_pilot_ai/
 ├── backend/                  # Python backend
 │   ├── core/                 # Core logic (actions, sessions)
+│   │   ├── actions.py        # Action builders (MESSAGE, FORM_COMPLETE, TOOL_CALL)
+│   │   └── session.py        # In-memory session store
 │   ├── agent/                # LangGraph state machine
 │   │   ├── graph.py          # Graph definition (nodes + edges + compile)
 │   │   ├── state.py          # FormPilotState TypedDict with reducers
@@ -105,13 +107,11 @@ form_pilot_ai/
 │       ├── services/         # ChatService, MockTools
 │       └── widgets/          # Chat panel, dynamic widgets, debug panel, schema selector
 ├── docs/                     # Project documentation
-│   ├── schema_guide.md       # How to write a form definition
 │   ├── api_reference.md      # Backend API endpoints and contracts
 │   └── action_protocol.md    # AI action types and JSON formats
 ├── Dockerfile                # Backend Docker image
 ├── docker-compose.yml        # Local development with Docker
-├── .env.example              # Environment variable template
-└── .plan/                    # Project plan and TODO
+└── .env.example              # Environment variable template
 ```
 
 ## Setup
@@ -152,27 +152,22 @@ flutter run -d chrome
 python -m pytest backend/tests/ -v
 ```
 
-**242 tests** across 11 test modules:
+**75 tests** across 7 test modules:
 
 | Module | Count | Coverage |
 |--------|-------|----------|
-| `test_schema.py` | 34 | Schema validation, field types, visibility references |
-| `test_visibility.py` | 56 | All 7 condition operators, AND logic, date comparisons |
-| `test_form_state.py` | 55 | State management, answer CRUD, cascading visibility, bulk answers |
-| `test_actions.py` | 6 | Action builders (message, completion, tool call) |
-| `test_orchestrator.py` | 16 | Orchestrator with mock LLM, two-phase flow, tool calls |
-| `test_api.py` | 13 | API endpoint integration, session store |
-| `test_e2e.py` | 10 | Full multi-turn conversation flows with extraction and tool calls |
-| `test_boundary.py` | 24 | Edge cases: 50+ fields, nested deps, date boundaries |
-| `test_llm_resilience.py` | 11 | Malformed JSON, retries, LLM exceptions |
-| `test_api_e2e.py` | 8 | Multi-turn HTTP API conversations with tool call round-trips |
+| `test_orchestrator.py` | 21 | LangGraph with mock LLM, two-phase flow, tool calls |
+| `test_api.py` | 16 | API endpoint integration, session store |
+| `test_llm_resilience.py` | 12 | Malformed JSON, retries, LLM exceptions |
+| `test_actions.py` | 9 | Action builders (message, completion, tool call) |
+| `test_e2e.py` | 6 | Full multi-turn conversation flows with extraction and tool calls |
+| `test_api_e2e.py` | 6 | Multi-turn HTTP API conversations with tool call round-trips |
 | `test_bulk_extraction.py` | 5 | Bulk extraction scenarios: complete, partial, gibberish |
 
 ## Documentation
 
 | Document | Description |
 |----------|-------------|
-| [Schema Guide](docs/schema_guide.md) | How to write a form definition (markdown) |
 | [API Reference](docs/api_reference.md) | Backend API endpoints and contracts |
 | [Action Protocol](docs/action_protocol.md) | AI action types and JSON formats |
 
@@ -301,15 +296,11 @@ docker run -p 8000:8000 --env-file .env formpilot-ai
 
 | Phase | Description | Status |
 |-------|-------------|--------|
-| 0 | Project Setup & Environment | Done |
-| 1 | Form Schema Definition & Validation | Done |
-| 2 | Deterministic Visibility Evaluator | Done |
-| 3 | Form State Manager | Done |
-| 4 | AI Action Protocol | Done |
-| 5 | LangChain Structured Chat Agent | Done |
-| 6 | Backend API Layer | Done |
-| 7 | Flutter Web App (Simulation & Testing) | Done |
-| 8 | Testing & Quality Assurance | Done |
-| 9 | Documentation & Deployment | Done |
-| 10 | Markdown-Driven Architecture | Done |
-| 11 | LangGraph State Machine Migration | Done |
+| 1 | Project Setup & Environment | Done |
+| 2 | AI Action Protocol | Done |
+| 3 | LangGraph State Machine | Done |
+| 4 | Backend API Layer (FastAPI) | Done |
+| 5 | Markdown-Driven Form Definitions | Done |
+| 6 | Flutter Web App (Simulation & Testing) | Done |
+| 7 | Testing & Quality Assurance | Done |
+| 8 | Documentation & Deployment | Done |

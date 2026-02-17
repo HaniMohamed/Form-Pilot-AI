@@ -129,7 +129,7 @@ async def chat(request: ChatRequest):
 
 @router.get("/schemas")
 async def list_schemas():
-    """List available example schema files (.md and .json)."""
+    """List available example schema files (.md)."""
     schemas = []
     if SCHEMAS_DIR.exists():
         for path in sorted(SCHEMAS_DIR.glob("*.md")):
