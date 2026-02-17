@@ -57,15 +57,31 @@ START -> route_input -> {greeting, tool_handler, validate_input, extraction, con
 | **conversation** | Builds the system prompt, calls the LLM, handles retries |
 | **finalize** | Tracks pending fields, resolves text validation, records history |
 
-### Form Definition: Markdown-Driven
+### Form Definition: Hybrid YAML + Markdown
 
-Forms are defined as **markdown documents** (`.md` files). The LLM interprets the markdown directly to understand fields, rules, validation, and available tool calls. This replaces the previous JSON schema approach, giving maximum flexibility.
+Forms are defined as `.md` files using a **hybrid format**: structured YAML frontmatter for field/tool metadata, plus a markdown body for rich LLM instructions.
 
-Example markdown forms are in `backend/schemas/`. The markdown includes:
-- Field definitions with types and constraints
-- Validation rules and dependencies
-- Tool call definitions (e.g. `get_establishments`, `get_injury_types`)
-- Business rules and conditional logic
+```
+---
+form_id: my_form
+title: My Form
+fields:
+  - id: name
+    type: text
+    required: true
+    prompt: "What is your name?"
+tools:
+  - name: get_data
+    purpose: "Fetch options"
+---
+# My Form
+(markdown body — business rules, display logic, chat instructions)
+```
+
+- **YAML frontmatter** — parsed deterministically by code for field IDs, types, required flags, and tool definitions
+- **Markdown body** — interpreted by the LLM for conversation behavior, conditional logic, and display rules
+
+Example forms are in `backend/schemas/`. See [Schema Guide](docs/schema_guide.md) for the full authoring reference.
 
 ### Tool Call Round-Trip
 
@@ -87,6 +103,7 @@ form_pilot_ai/
 │   ├── agent/                # LangGraph state machine
 │   │   ├── graph.py          # Graph definition (nodes + edges + compile)
 │   │   ├── state.py          # FormPilotState TypedDict with reducers
+│   │   ├── frontmatter.py    # YAML frontmatter parser for form definitions
 │   │   ├── utils.py          # Shared utilities (validation, JSON, LLM retry)
 │   │   ├── nodes/            # Individual graph nodes
 │   │   │   ├── greeting.py   # Initial welcome message
@@ -107,6 +124,7 @@ form_pilot_ai/
 │       ├── services/         # ChatService, MockTools
 │       └── widgets/          # Chat panel, dynamic widgets, debug panel, schema selector
 ├── docs/                     # Project documentation
+│   ├── schema_guide.md       # How to write form definitions (YAML + Markdown)
 │   ├── api_reference.md      # Backend API endpoints and contracts
 │   └── action_protocol.md    # AI action types and JSON formats
 ├── Dockerfile                # Backend Docker image
@@ -168,6 +186,7 @@ python -m pytest backend/tests/ -v
 
 | Document | Description |
 |----------|-------------|
+| [Schema Guide](docs/schema_guide.md) | How to write form definitions (YAML frontmatter + Markdown) |
 | [API Reference](docs/api_reference.md) | Backend API endpoints and contracts |
 | [Action Protocol](docs/action_protocol.md) | AI action types and JSON formats |
 

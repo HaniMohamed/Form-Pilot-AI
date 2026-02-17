@@ -1,16 +1,28 @@
 """
-System prompt builder for the markdown-driven form-filling agent.
+System prompt builder for the form-filling agent.
 
-The LLM receives a condensed version of the form context as its system
-prompt. For small models (3B–8B), the full markdown is too large and
-causes the model to ignore output format instructions. The condenser
-extracts only the essential sections (field summary, tool calls,
-instructions) to keep the prompt focused.
+Supports two form definition formats:
+1. **Hybrid** (recommended): YAML frontmatter + Markdown body.
+   Structured field/tool data is parsed from the YAML header.
+   The markdown body provides rich context for the LLM.
+2. **Legacy**: Pure markdown with a Field Summary Table.
+   Fields are extracted via regex table parsing (backward compat).
+
+The LLM receives a condensed version of the markdown body as its
+system prompt. For small models (3B–8B), the full markdown is too
+large and causes the model to ignore output format instructions.
 """
 
 import json
 import re
 from typing import Any
+
+from backend.agent.frontmatter import (
+    get_field_type_map,
+    get_required_field_ids,
+    get_title,
+    parse_frontmatter,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -32,22 +44,29 @@ _KEY_SECTIONS = [
 
 
 def extract_form_title(form_context_md: str) -> str:
-    """Extract the form title from the first markdown heading.
+    """Extract the form title from frontmatter or the first markdown heading.
 
-    Looks for the first line starting with '# ' and returns the text.
-    Falls back to 'Form' if no heading is found.
+    Checks YAML frontmatter first. Falls back to parsing the first
+    '# ' heading in the markdown. Returns 'Form' if nothing is found.
 
     Args:
-        form_context_md: The markdown form definition.
+        form_context_md: The full form definition (may include frontmatter).
 
     Returns:
         The form title string.
     """
-    for line in form_context_md.splitlines():
+    # Try frontmatter first
+    frontmatter, body = parse_frontmatter(form_context_md)
+    fm_title = get_title(frontmatter)
+    if fm_title:
+        return fm_title
+
+    # Fall back to first markdown heading
+    source = body if frontmatter else form_context_md
+    for line in source.splitlines():
         stripped = line.strip()
         if stripped.startswith("# "):
             title = stripped[2:].strip()
-            # Remove common prefixes like "Form Pilot:" for cleaner display
             for prefix in ["Form Pilot:", "Form Pilot -", "FormPilot:"]:
                 if title.lower().startswith(prefix.lower()):
                     title = title[len(prefix) :].strip()
@@ -58,37 +77,49 @@ def extract_form_title(form_context_md: str) -> str:
 def summarize_required_fields(form_context_md: str) -> str:
     """Build a natural-language summary of the required fields.
 
-    Parses the Field Summary Table, groups required fields by type,
-    and returns a conversational sentence describing what data is needed.
+    Checks YAML frontmatter first, falls back to parsing the markdown
+    Field Summary Table. Groups required fields by type and returns a
+    conversational sentence describing what data is needed.
 
     Args:
-        form_context_md: The markdown form definition.
+        form_context_md: The full form definition (may include frontmatter).
 
     Returns:
         A human-friendly summary string, or empty string if nothing found.
     """
-    # Collect (field_id, type) pairs for required rows
     fields: list[tuple[str, str]] = []
-    in_table = False
 
-    for line in form_context_md.splitlines():
-        stripped = line.strip()
-        if "Field ID" in stripped and "Required" in stripped and "|" in stripped:
-            in_table = True
-            continue
-        if in_table and stripped.startswith("|") and "---" in stripped:
-            continue
-        if in_table and stripped.startswith("|"):
-            cells = [c.strip() for c in stripped.split("|")]
-            cells = [c for c in cells if c]
-            if len(cells) >= 4:
-                field_id = cells[1].strip("`").strip()
-                field_type = cells[2].strip().lower()
-                required_raw = cells[3].strip().lower()
-                if required_raw.startswith("yes") and field_id:
-                    fields.append((field_id, field_type))
-        elif in_table and not stripped.startswith("|"):
-            break
+    # Try frontmatter first
+    frontmatter, _ = parse_frontmatter(form_context_md)
+    if frontmatter and frontmatter.get("fields"):
+        from backend.agent.frontmatter import extract_fields
+        for field in extract_fields(frontmatter):
+            field_id = field.get("id", "")
+            field_type = field.get("type", "").lower()
+            req = field.get("required", False)
+            if (req is True or (isinstance(req, str) and req.lower() == "true")) and field_id:
+                fields.append((field_id, field_type))
+    else:
+        # Fall back to markdown table parsing
+        in_table = False
+        for line in form_context_md.splitlines():
+            stripped = line.strip()
+            if "Field ID" in stripped and "Required" in stripped and "|" in stripped:
+                in_table = True
+                continue
+            if in_table and stripped.startswith("|") and "---" in stripped:
+                continue
+            if in_table and stripped.startswith("|"):
+                cells = [c.strip() for c in stripped.split("|")]
+                cells = [c for c in cells if c]
+                if len(cells) >= 4:
+                    field_id = cells[1].strip("`").strip()
+                    field_type = cells[2].strip().lower()
+                    required_raw = cells[3].strip().lower()
+                    if required_raw.startswith("yes") and field_id:
+                        fields.append((field_id, field_type))
+            elif in_table and not stripped.startswith("|"):
+                break
 
     if not fields:
         return ""
@@ -205,69 +236,83 @@ def _join_phrases(phrases: list[str]) -> str:
 
 
 def extract_required_field_ids(form_context_md: str) -> list[str]:
-    """Extract required field IDs from the Field Summary Table in the markdown.
+    """Extract required field IDs from frontmatter or the Field Summary Table.
 
-    Parses the markdown table looking for rows where the "Required" column
-    says "Yes". Returns the field IDs in order.
+    Checks YAML frontmatter first for structured field definitions.
+    Falls back to parsing the markdown Field Summary Table for backward
+    compatibility with forms that don't have frontmatter.
 
     Args:
-        form_context_md: The markdown form definition.
+        form_context_md: The full form definition (may include frontmatter).
 
     Returns:
         List of required field_id strings (e.g. ["selectedEstablishment", ...]).
     """
+    # Try frontmatter first
+    frontmatter, _ = parse_frontmatter(form_context_md)
+    if frontmatter and frontmatter.get("fields"):
+        return get_required_field_ids(frontmatter)
+
+    # Fall back to markdown table parsing
+    return _extract_required_from_table(form_context_md)
+
+
+def _extract_required_from_table(form_context_md: str) -> list[str]:
+    """Legacy: parse required field IDs from a markdown Field Summary Table."""
     required: list[str] = []
     in_table = False
 
     for line in form_context_md.splitlines():
         stripped = line.strip()
-        # Detect start of Field Summary Table (header row with "Field ID")
         if "Field ID" in stripped and "Required" in stripped and "|" in stripped:
             in_table = True
             continue
-        # Skip separator row (|---|---|...)
         if in_table and stripped.startswith("|") and "---" in stripped:
             continue
-        # Parse table rows
         if in_table and stripped.startswith("|"):
             cells = [c.strip() for c in stripped.split("|")]
-            # Filter empty strings from split (leading/trailing pipes)
             cells = [c for c in cells if c]
             if len(cells) >= 4:
-                field_id_raw = cells[1]  # Second column: Field ID
-                required_raw = cells[3]  # Fourth column: Required
-                # Extract field_id from backticks if present
+                field_id_raw = cells[1]
+                required_raw = cells[3]
                 field_id = field_id_raw.strip("`").strip()
-                # Check if required is "Yes"
                 if required_raw.strip().lower().startswith("yes"):
                     if field_id and field_id != "Document Uploads":
                         required.append(field_id)
         elif in_table and not stripped.startswith("|"):
-            # End of table
             break
 
     return required
 
 
 def extract_field_type_map(form_context_md: str) -> dict[str, str]:
-    """Extract a mapping of field_id -> field_type from the Field Summary Table.
+    """Extract a mapping of field_id -> field_type from frontmatter or table.
 
-    Parses the markdown table and returns a dict like:
-    {"injuryDate": "date", "injuryTime": "time", "selectedEstablishment": "dropdown", ...}
+    Checks YAML frontmatter first. Falls back to parsing the markdown
+    Field Summary Table for backward compatibility.
 
     Args:
-        form_context_md: The markdown form definition.
+        form_context_md: The full form definition (may include frontmatter).
 
     Returns:
         Dict mapping field IDs to their type strings (lowercase).
     """
+    # Try frontmatter first
+    frontmatter, _ = parse_frontmatter(form_context_md)
+    if frontmatter and frontmatter.get("fields"):
+        return get_field_type_map(frontmatter)
+
+    # Fall back to markdown table parsing
+    return _extract_types_from_table(form_context_md)
+
+
+def _extract_types_from_table(form_context_md: str) -> dict[str, str]:
+    """Legacy: parse field types from a markdown Field Summary Table."""
     field_types: dict[str, str] = {}
     in_table = False
 
     for line in form_context_md.splitlines():
         stripped = line.strip()
-        # Detect the Field Summary Table header — must have all three keywords
-        # to avoid matching individual field property tables
         if "Field ID" in stripped and "Required" in stripped and "|" in stripped:
             in_table = True
             continue
@@ -276,7 +321,6 @@ def extract_field_type_map(form_context_md: str) -> dict[str, str]:
         if in_table and stripped.startswith("|"):
             cells = [c.strip() for c in stripped.split("|")]
             cells = [c for c in cells if c]
-            # Table columns: #, Field ID, Type, Required, Before Asking, Ask User
             if len(cells) >= 4:
                 field_id = cells[1].strip("`").strip()
                 field_type = cells[2].strip().lower()
@@ -291,17 +335,21 @@ def extract_field_type_map(form_context_md: str) -> dict[str, str]:
 def condense_form_context(form_context_md: str) -> str:
     """Condense a large form markdown to just the essential sections.
 
-    Extracts key sections like field summaries, tool calls, and
-    instructions. Falls back to head+tail truncation if no sections
-    are found.
+    If the content has YAML frontmatter, it is stripped — the LLM
+    receives only the markdown body. Extracts key sections like field
+    summaries, tool calls, and instructions. Falls back to head+tail
+    truncation if no sections are found.
 
     Args:
-        form_context_md: The full markdown form definition.
+        form_context_md: The full form definition (may include frontmatter).
 
     Returns:
         A condensed version suitable for LLM system prompts.
     """
-    lines = form_context_md.splitlines()
+    # Strip frontmatter — the LLM needs only the markdown body
+    frontmatter, body = parse_frontmatter(form_context_md)
+    source = body if frontmatter else form_context_md
+    lines = source.splitlines()
 
     # If already short enough, return as-is
     if len(lines) <= _MAX_CONTEXT_LINES:

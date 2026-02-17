@@ -22,7 +22,7 @@
    - 4.8 [Session Management](#48-session-management)
    - 4.9 [Core Modules](#49-core-modules)
 5. [Flutter Web App](#5-flutter-web-app)
-6. [Form Definitions (Markdown-Driven)](#6-form-definitions-markdown-driven)
+6. [Form Definitions (Hybrid YAML + Markdown)](#6-form-definitions-hybrid-yaml--markdown)
 7. [AI Action Protocol](#7-ai-action-protocol)
 8. [Conversation Flow](#8-conversation-flow)
 9. [Tool Call Round-Trip](#9-tool-call-round-trip)
@@ -52,7 +52,7 @@
 ### Core Principles
 
 - **No RAG, no embeddings, no vector databases** - Pure structured form schema + LLM reasoning.
-- **Markdown-driven** - Forms are defined as markdown files, not rigid JSON schemas.
+- **Hybrid form definitions** - YAML frontmatter for structured metadata + markdown body for LLM instructions.
 - **Deterministic where possible** - Visibility rules, date validation, and answer storage are handled in code, not by the LLM.
 - **LLM for conversation only** - The LLM interprets context, generates questions, and validates text relevance. It does NOT call APIs or access databases.
 - **Simplicity first** - No microservices, no message queues, no over-engineering.
@@ -140,6 +140,7 @@ form_pilot_ai/
 │   └── FULL_PROJECT_DOCUMENTATION.md     # THIS FILE
 │
 ├── docs/                                 # Public documentation
+│   ├── schema_guide.md                   # How to write form definitions (YAML + MD)
 │   ├── api_reference.md                  # REST API endpoint docs
 │   └── action_protocol.md               # AI action types & JSON formats
 │
@@ -150,6 +151,7 @@ form_pilot_ai/
 │   │   ├── graph.py                      # Graph definition, compilation, state helpers
 │   │   ├── state.py                      # FormPilotState TypedDict with reducers
 │   │   ├── prompts.py                    # System prompt templates & builders
+│   │   ├── frontmatter.py               # YAML frontmatter parser for form defs
 │   │   ├── utils.py                      # JSON extraction, validation, LLM retry
 │   │   ├── llm_provider.py              # LLM factory (OpenAI-compatible)
 │   │   └── nodes/                        # Individual graph nodes
@@ -449,13 +451,25 @@ A simpler prompt for bulk extraction from the user's initial free-text:
 2. **Rules**: Only extract explicitly stated values, use ISO dates, skip uncertain fields
 3. **Expected format**: `{"intent": "multi_answer", "answers": {...}, "message": "..."}`
 
+#### YAML Frontmatter Parser
+
+Defined in `backend/agent/frontmatter.py`. For hybrid form definitions:
+
+1. `parse_frontmatter()` splits content into `(frontmatter_dict, markdown_body)`.
+2. `get_required_field_ids()` extracts required field IDs from the `fields` list.
+3. `get_field_type_map()` builds `field_id -> type` mapping.
+4. `get_title()` returns the form title.
+
+All extraction functions in `prompts.py` try frontmatter first, then fall back to legacy markdown table parsing for backward compatibility.
+
 #### Form Context Condenser
 
 Large markdown files overwhelm small LLMs (3B-8B params). The `condense_form_context()` function:
 
-1. If the markdown is under 150 lines, uses it as-is.
-2. Otherwise, extracts only key sections: "Tool Calls", "Form Overview", "Field Summary", "Conditional Logic", "Chat Agent Instructions".
-3. Falls back to head (50 lines) + tail (100 lines) if section extraction fails.
+1. Strips YAML frontmatter (the code already parsed it; the LLM doesn't need it).
+2. If the remaining markdown is under 150 lines, uses it as-is.
+3. Otherwise, extracts only key sections: "Form Overview", "Conditional Logic", "Chat Agent Instructions".
+4. Falls back to head (50 lines) + tail (100 lines) if section extraction fails.
 
 #### Next-Step Hint Builder
 
@@ -636,47 +650,51 @@ The `mock_tools.dart` file simulates tool calls with hardcoded test data. For ex
 
 ---
 
-## 6. Form Definitions (Markdown-Driven)
+## 6. Form Definitions (Hybrid YAML + Markdown)
 
-Forms are defined as **markdown documents** that the LLM interprets directly. This is the primary form definition approach (replacing the older JSON schema approach).
+Forms are defined as `.md` files using a **hybrid format**: structured YAML frontmatter for field/tool metadata, plus a markdown body for rich LLM instructions.
 
-### Why Markdown?
+### Why Hybrid?
 
-- **Maximum flexibility** - Can include complex business rules, conditional logic, tool call instructions, and examples in natural language
-- **LLM-native** - LLMs understand markdown naturally; no need for a rigid schema parser
-- **Human-readable** - Form authors can write and review definitions easily
-- **Extensible** - Add new sections, rules, or instructions without changing backend code
+- **Deterministic parsing** — Code reads field IDs, types, and required flags from YAML (no regex on markdown tables)
+- **Maximum flexibility** — Business rules, conditional logic, and tool instructions stay in natural-language markdown
+- **LLM-native** — The markdown body is sent directly to the LLM for conversation context
+- **Human-readable** — Form authors can write and review definitions easily
+- **Backward compatible** — Forms without frontmatter still work via legacy markdown table parsing
 
-### Markdown Form Structure
-
-A markdown form definition typically contains:
+### Format
 
 ```markdown
-# Form Title
-
-## Architecture / Communication Model
-(How the AI and Flutter app communicate)
+---
+form_id: my_form
+title: My Form
+fields:
+  - id: name
+    type: text
+    required: true
+    prompt: "What is your name?"
+  - id: color
+    type: dropdown
+    required: true
+    prompt: "Favorite color?"
+    options: ["Red", "Blue"]
+tools:
+  - name: get_data
+    purpose: "Fetch options"
+    when: "Start of conversation"
+    args: {}
+    returns: "Array of options"
+---
+# My Form
 
 ## Form Overview
 (Purpose, language, flow steps)
 
 ## Step N: Step Name
-(Detailed field-by-field specifications)
-
-### N.M - Field Name
-| Property | Value |
-|----------|-------|
-| Field ID | `fieldId` |
-| Type     | dropdown/text/date/etc. |
-| Required | Yes/No |
-| ...      | ... |
-
-## Field Summary Table
-| # | Field ID | Type | Required | Before Asking | Ask User |
-(Quick reference for all fields)
+(Detailed per-field behavior, display logic, validation)
 
 ## Conditional Logic Summary
-(Business rules and dependencies)
+(Business rules and dependencies table)
 
 ## Chat Agent Instructions
 (Step-by-step flow for the AI)
@@ -684,12 +702,16 @@ A markdown form definition typically contains:
 
 ### Key Sections the Backend Parses
 
-The backend extracts structured data from the markdown:
+The backend extracts structured data from the YAML frontmatter (falling back to markdown table parsing for legacy forms):
 
-1. **Field Summary Table** -> `extract_required_field_ids()` gets required field IDs
-2. **Field Summary Table** -> `extract_field_type_map()` gets field_id -> type mapping
-3. **First heading** -> `extract_form_title()` gets the form title
-4. **Required fields by type** -> `summarize_required_fields()` generates a natural greeting
+1. **Frontmatter `fields`** → `extract_required_field_ids()` gets required field IDs
+2. **Frontmatter `fields`** → `extract_field_type_map()` gets field_id → type mapping
+3. **Frontmatter `title`** → `extract_form_title()` gets the form title
+4. **Frontmatter `fields`** → `summarize_required_fields()` generates a natural greeting
+
+Parser module: `backend/agent/frontmatter.py`
+
+See [Schema Guide](docs/schema_guide.md) for the full authoring reference.
 
 ### Example: Report Occupational Injury Form
 
@@ -1247,18 +1269,18 @@ flutter run -d chrome
 - Easy to add/remove/reorder nodes
 - Integrates natively with LangChain LLM abstractions
 
-### 2. Markdown over JSON Schema
+### 2. Hybrid YAML + Markdown over JSON Schema
 
-**Decision**: Define forms as markdown documents instead of rigid JSON schemas.
+**Decision**: Define forms as hybrid `.md` files with YAML frontmatter for structured metadata and a markdown body for LLM context.
 
 **Why**:
-- LLMs interpret markdown natively and well
-- Maximum flexibility for complex business rules
-- Can include examples, instructions, and conditional logic in natural language
+- YAML frontmatter provides deterministic, type-safe field/tool parsing (no regex on tables)
+- Markdown body gives the LLM natural-language instructions, business rules, and examples
 - Human-readable and easy to author
 - Extensible without backend code changes
+- Backward compatible with legacy pure-markdown forms
 
-**Trade-off**: Less type-safe than JSON schemas. The backend still parses the Field Summary Table for required fields and types.
+**Trade-off**: Two formats in one file. Authors must understand the boundary: data in YAML, behavior in markdown.
 
 ### 3. Two-Phase Conversation Flow
 
@@ -1305,7 +1327,8 @@ flutter run -d chrome
 
 **Why**:
 - Small models (3B-8B parameters) lose track of output format instructions when the prompt is too long
-- The Field Summary Table and Tool Calls sections contain the most critical information
+- The YAML frontmatter is stripped (code already parsed it); only the markdown body is sent
+- Key sections (conditional logic, agent instructions) contain the most critical LLM context
 - Detailed per-field descriptions can be omitted without losing functionality
 
 ### 8. Aggressive LLM Guards
@@ -1325,7 +1348,7 @@ flutter run -d chrome
 FormPilot AI is a complete, production-ready conversational form-filling system that combines:
 
 - **LangGraph state machine** for explicit, inspectable conversation flow
-- **Markdown-driven form definitions** for maximum flexibility
+- **Hybrid YAML + markdown form definitions** for structured parsing and LLM flexibility
 - **Dual validation** (deterministic + LLM-based) for reliable data collection
 - **Tool call round-trip** for secure external data access
 - **Aggressive LLM guards** for reliability with smaller models
