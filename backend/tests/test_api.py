@@ -20,6 +20,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from backend.agent.graph import compile_graph
 from backend.api.routes import configure_routes, router
 from backend.core.session import SessionStore
 
@@ -68,11 +69,12 @@ class MockLLM:
 
 
 def _create_test_app(llm=None):
-    """Create a FastAPI test client with a mock LLM."""
+    """Create a FastAPI test client with a mock LLM and compiled graph."""
     app = FastAPI()
     session_store = SessionStore(timeout_seconds=3600)
     mock_llm = llm or MockLLM()
-    configure_routes(session_store, mock_llm)
+    graph = compile_graph()
+    configure_routes(session_store, mock_llm, graph)
     app.include_router(router, prefix="/api")
     return TestClient(app), session_store, mock_llm
 

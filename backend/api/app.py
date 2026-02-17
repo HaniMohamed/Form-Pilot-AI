@@ -2,7 +2,7 @@
 FastAPI application factory for FormPilot AI.
 
 Creates and configures the FastAPI app, initializes the LLM provider,
-session store, and routes.
+session store, LangGraph, and routes.
 
 Run with:
     uvicorn backend.api.app:app --reload
@@ -15,6 +15,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from backend.agent.graph import compile_graph
 from backend.agent.llm_provider import get_llm
 from backend.api.routes import configure_routes, router
 from backend.core.session import SessionStore
@@ -36,7 +37,7 @@ def create_app() -> FastAPI:
     application = FastAPI(
         title="FormPilot AI",
         description="GenAI Conversational Form Filling System",
-        version="0.1.0",
+        version="0.2.0",
     )
 
     # CORS — allow all origins in development
@@ -61,12 +62,16 @@ def create_app() -> FastAPI:
         )
         llm = None
 
+    # Compile the LangGraph state machine (once, shared across all sessions)
+    graph = compile_graph()
+    logger.info("LangGraph compiled successfully")
+
     # Initialize session store
     session_timeout = int(os.getenv("SESSION_TIMEOUT_SECONDS", "1800"))
     session_store = SessionStore(timeout_seconds=session_timeout)
 
     # Configure routes with dependencies
-    configure_routes(session_store, llm)
+    configure_routes(session_store, llm, graph)
     application.include_router(router, prefix="/api")
 
     @application.on_event("startup")

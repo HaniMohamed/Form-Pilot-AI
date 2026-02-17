@@ -1,16 +1,17 @@
 """
 In-memory session store for conversation state.
 
-Each session holds the markdown form context, an orchestrator, conversation
-history, and a simple answer dict. Sessions are created on the first /chat
-call and cleaned up after a timeout.
+Each session holds a FormPilotState dict that tracks all conversation
+progress. Sessions are created on the first /chat call and cleaned up
+after a timeout.
 """
 
 import time
 import uuid
 from typing import Any
 
-from backend.agent.orchestrator import FormOrchestrator
+from backend.agent.graph import create_initial_state
+from backend.agent.state import FormPilotState
 
 
 # Default session timeout: 30 minutes
@@ -18,11 +19,13 @@ DEFAULT_SESSION_TIMEOUT_SECONDS = 30 * 60
 
 
 class Session:
-    """A single conversation session."""
+    """A single conversation session.
 
-    def __init__(self, form_context_md: str, orchestrator: FormOrchestrator):
-        self.form_context_md = form_context_md
-        self.orchestrator = orchestrator
+    Holds the LangGraph state dict that persists across conversation turns.
+    """
+
+    def __init__(self, state: FormPilotState):
+        self.state: FormPilotState = state
         self.created_at: float = time.time()
         self.last_accessed_at: float = time.time()
 
@@ -54,6 +57,9 @@ class SessionStore:
     ) -> tuple[str, Session]:
         """Create a new session for a markdown form context.
 
+        Initializes the LangGraph state with the form definition
+        and LLM instance.
+
         Args:
             form_context_md: The markdown content describing the form.
             llm: A LangChain BaseChatModel instance.
@@ -65,8 +71,8 @@ class SessionStore:
         if conversation_id is None:
             conversation_id = str(uuid.uuid4())
 
-        orchestrator = FormOrchestrator(form_context_md, llm)
-        session = Session(form_context_md, orchestrator)
+        state = create_initial_state(form_context_md, llm)
+        session = Session(state)
 
         self._sessions[conversation_id] = session
         return conversation_id, session

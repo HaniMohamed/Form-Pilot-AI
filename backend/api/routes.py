@@ -16,6 +16,8 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from backend.agent.graph import prepare_turn_input
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
@@ -23,18 +25,20 @@ router = APIRouter()
 # These will be injected by the app factory
 _session_store = None
 _llm = None
+_graph = None
 
 SCHEMAS_DIR = Path(__file__).parent.parent / "schemas"
 
 
-def configure_routes(session_store, llm):
-    """Inject the session store and LLM into the routes module.
+def configure_routes(session_store, llm, graph=None):
+    """Inject the session store, LLM, and compiled graph into the routes module.
 
     Called by the app factory during startup.
     """
-    global _session_store, _llm
+    global _session_store, _llm, _graph
     _session_store = session_store
     _llm = llm
+    _graph = graph
 
 
 # --- Request / Response Models ---
@@ -72,8 +76,10 @@ async def chat(request: ChatRequest):
 
     If conversation_id is provided, resumes an existing session.
     Otherwise, creates a new session from the provided markdown context.
+    The LangGraph state machine handles all routing: greeting, extraction,
+    validation, tool handling, and conversation.
     """
-    if _session_store is None or _llm is None:
+    if _session_store is None or _llm is None or _graph is None:
         raise HTTPException(status_code=500, detail="Server not properly configured")
 
     if not request.form_context_md.strip():
@@ -94,21 +100,16 @@ async def chat(request: ChatRequest):
             conversation_id=conversation_id,
         )
 
-        # If this is the first message and it's empty/greeting, return initial action
-        if not request.user_message.strip() and not request.tool_results:
-            action = session.orchestrator.get_initial_action()
-            return ChatResponse(
-                action=action,
-                conversation_id=conversation_id,
-                answers=session.orchestrator.get_answers(),
-            )
+    # Prepare state for this turn (set input, reset ephemeral fields)
+    turn_state = prepare_turn_input(
+        state=session.state,
+        user_message=request.user_message,
+        tool_results=request.tool_results,
+    )
 
-    # Process the user message (with optional tool results)
+    # Invoke the LangGraph state machine
     try:
-        action = await session.orchestrator.process_user_message(
-            user_message=request.user_message,
-            tool_results=request.tool_results,
-        )
+        result_state = await _graph.ainvoke(turn_state)
     except Exception as e:
         logger.error("Error processing message: %s", e, exc_info=True)
         raise HTTPException(
@@ -116,10 +117,13 @@ async def chat(request: ChatRequest):
             detail=f"Error processing message: {str(e)}",
         )
 
+    # Persist the updated state back to the session
+    session.state = result_state
+
     return ChatResponse(
-        action=action,
+        action=result_state.get("action", {}),
         conversation_id=conversation_id,
-        answers=session.orchestrator.get_answers(),
+        answers=result_state.get("answers", {}),
     )
 
 

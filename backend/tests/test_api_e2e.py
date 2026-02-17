@@ -14,6 +14,7 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from backend.agent.graph import compile_graph
 from backend.api.routes import configure_routes, router
 from backend.core.session import SessionStore
 
@@ -69,7 +70,8 @@ class SequenceMockLLM:
 def _create_app(llm) -> tuple[TestClient, SessionStore]:
     app = FastAPI()
     store = SessionStore()
-    configure_routes(store, llm)
+    graph = compile_graph()
+    configure_routes(store, llm, graph)
     app.include_router(router, prefix="/api")
     return TestClient(app), store
 
@@ -332,7 +334,8 @@ class TestApiErrorHandling:
         ])
         app = FastAPI()
         store = SessionStore(timeout_seconds=0)
-        configure_routes(store, llm)
+        graph = compile_graph()
+        configure_routes(store, llm, graph)
         app.include_router(router, prefix="/api")
         client = TestClient(app)
 

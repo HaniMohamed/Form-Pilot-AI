@@ -18,11 +18,11 @@ FormPilot AI helps users fill complex forms through natural conversation. The AI
 ```
 ┌──────────────────────┐     ┌──────────────────────┐     ┌─────────┐
 │  Flutter Web App     │────▶│  Python Backend       │────▶│  LLM    │
-│  (Simulation & Test) │◀────│  (FastAPI)            │◀────│  (API)  │
+│  (Simulation & Test) │◀────│  (FastAPI + LangGraph)│◀────│  (API)  │
 └──────────────────────┘     └──────────────────────┘     └─────────┘
         │                            │
-   Chat Panel              Markdown Form Interpretation
-   Inline Action Widgets   Conversation Orchestrator
+   Chat Panel              LangGraph State Machine
+   Inline Action Widgets   Node-based Conversation Flow
    Mock Tool Execution     System Prompt Builder
    JSON Debug Panel        LLM Resilience Layer
 ```
@@ -32,8 +32,30 @@ FormPilot AI helps users fill complex forms through natural conversation. The AI
 | Component | Purpose |
 |-----------|---------|
 | **Flutter Web App** | Simulation UI with chat, inline action widgets, mock tool execution, and debug panel |
-| **Python Backend** | LangChain agent, markdown-driven orchestrator, API |
+| **Python Backend** | LangGraph state machine with explicit nodes and edges, FastAPI API |
 | **LLM** | Reasoning, form interpretation, and structured output (no direct tool calling, no API access) |
+
+### LangGraph State Machine
+
+The conversation flow is modeled as an explicit state machine using LangGraph:
+
+```
+START -> route_input -> {greeting, tool_handler, validate_input, extraction, conversation}
+  greeting      -> END
+  tool_handler  -> conversation -> finalize -> END
+  validate      -> conversation -> finalize -> END
+  extraction    -> {conversation | finalize} -> END
+  conversation  -> finalize -> END
+```
+
+| Node | Responsibility |
+|------|----------------|
+| **greeting** | Builds the initial welcome message |
+| **tool_handler** | Processes tool results from the frontend into conversation history |
+| **validate_input** | Validates user answers (format for dates, LLM context for text) |
+| **extraction** | Bulk-extracts field values from the user's free-text description |
+| **conversation** | Builds the system prompt, calls the LLM, handles retries |
+| **finalize** | Tracks pending fields, resolves text validation, records history |
 
 ### Form Definition: Markdown-Driven
 
@@ -60,7 +82,20 @@ The AI can request tool calls from the frontend (e.g. to fetch dropdown options 
 form_pilot_ai/
 ├── backend/                  # Python backend
 │   ├── core/                 # Core logic (actions, sessions)
-│   ├── agent/                # LangChain agent, orchestrator, prompts
+│   ├── agent/                # LangGraph state machine
+│   │   ├── graph.py          # Graph definition (nodes + edges + compile)
+│   │   ├── state.py          # FormPilotState TypedDict with reducers
+│   │   ├── utils.py          # Shared utilities (validation, JSON, LLM retry)
+│   │   ├── nodes/            # Individual graph nodes
+│   │   │   ├── greeting.py   # Initial welcome message
+│   │   │   ├── extraction.py # Bulk field extraction
+│   │   │   ├── validation.py # User answer validation
+│   │   │   ├── tool_handler.py # Tool result processing
+│   │   │   ├── conversation.py # LLM conversation turn
+│   │   │   └── finalize.py   # Action post-processing
+│   │   ├── prompts.py        # System prompt templates
+│   │   ├── llm_provider.py   # LLM factory (OpenAI-compatible)
+│   │   └── orchestrator.py   # Compatibility wrapper for tests
 │   ├── api/                  # FastAPI routes
 │   ├── schemas/              # Example form definition markdown files
 │   └── tests/                # Unit and integration tests
@@ -187,7 +222,7 @@ FormPilot AI works with any **OpenAI-compatible** chat completions endpoint. Thi
 | `CUSTOM_LLM_API_KEY` | API key / bearer token |
 | `CUSTOM_LLM_MODEL_NAME` | Model identifier (defaults to `"default"`) |
 
-Under the hood, it uses LangChain's `ChatOpenAI` with a custom `base_url`.
+Under the hood, it uses LangChain's `ChatOpenAI` with a custom `base_url`, orchestrated by a LangGraph state machine.
 
 ## API Endpoints
 
@@ -278,3 +313,4 @@ docker run -p 8000:8000 --env-file .env formpilot-ai
 | 8 | Testing & Quality Assurance | Done |
 | 9 | Documentation & Deployment | Done |
 | 10 | Markdown-Driven Architecture | Done |
+| 11 | LangGraph State Machine Migration | Done |
