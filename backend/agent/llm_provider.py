@@ -10,10 +10,42 @@ format, such as GOSI Brain, Ollama, or any self-hosted LLM platform.
 
 import os
 
+import httpx
+
 from dotenv import load_dotenv
 from langchain_core.language_models import BaseChatModel
 
 load_dotenv()
+
+class CurlLoggingClient(httpx.Client):
+    def send(self, request, *args, **kwargs):
+        curl = f"curl -X {request.method} '{request.url}'"
+
+        for k, v in request.headers.items():
+            curl += f" -H '{k}: {v}'"
+
+        if request.content:
+            body = request.content.decode()
+            curl += f" -d '{body}'"
+
+        print("\n==== CURL ====\n", curl, "\n==============\n")
+
+        return super().send(request, *args, **kwargs)
+
+class CurlLoggingAsyncClient(httpx.AsyncClient):
+    def send(self, request, *args, **kwargs):
+        curl = f"curl -X {request.method} '{request.url}'"
+
+        for k, v in request.headers.items():
+            curl += f" -H '{k}: {v}'"
+
+        if request.content:
+            body = request.content.decode()
+            curl += f" -d '{body}'"
+
+        print("\n==== CURL ====\n", curl, "\n==============\n")
+
+        return super().send(request, *args, **kwargs)
 
 
 def get_llm(**kwargs) -> BaseChatModel:
@@ -56,10 +88,17 @@ def get_llm(**kwargs) -> BaseChatModel:
         if base_url.endswith(suffix):
             base_url = base_url[: -len(suffix)]
             break
-
-    return ChatOpenAI(
-        api_key=merged.pop("api_key", os.getenv("CUSTOM_LLM_API_KEY")),
-        model=merged.pop("model", os.getenv("CUSTOM_LLM_MODEL_NAME", "default")),
+        
+    client = CurlLoggingClient(verify=False)
+    asycn_client = CurlLoggingAsyncClient(verify=False)
+    
+    llm = ChatOpenAI(
+        api_key=os.getenv("CUSTOM_LLM_API_KEY"),
+        model=os.getenv("CUSTOM_LLM_MODEL_NAME", "default"),
         base_url=base_url,
-        **merged,
+        http_client=client,
+        http_async_client=asycn_client,
+        model_kwargs={},
     )
+   
+    return llm

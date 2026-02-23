@@ -134,7 +134,7 @@ async def list_schemas():
     if SCHEMAS_DIR.exists():
         for path in sorted(SCHEMAS_DIR.glob("*.md")):
             try:
-                content = path.read_text()
+                content = path.read_text(encoding="utf-8")
                 # Extract title from first markdown heading
                 title = path.stem
                 for line in content.splitlines():
@@ -159,7 +159,7 @@ async def get_schema(filename: str):
         raise HTTPException(status_code=404, detail=f"Schema '{filename}' not found")
 
     try:
-        content = path.read_text()
+        content = path.read_text(encoding="utf-8")
         return {"filename": filename, "content": content}
     except OSError:
         raise HTTPException(status_code=500, detail=f"Error reading schema file '{filename}'")
