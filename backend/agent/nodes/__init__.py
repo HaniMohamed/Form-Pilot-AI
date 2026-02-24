@@ -9,11 +9,13 @@ from backend.agent.nodes.conversation import conversation_node
 from backend.agent.nodes.extraction import extraction_node
 from backend.agent.nodes.finalize import finalize_node
 from backend.agent.nodes.greeting import greeting_node
+from backend.agent.nodes.step_confirmation import step_confirmation_node
 from backend.agent.nodes.tool_handler import tool_handler_node
 from backend.agent.nodes.validation import validate_input_node
 
 __all__ = [
     "greeting_node",
+    "step_confirmation_node",
     "tool_handler_node",
     "validate_input_node",
     "extraction_node",

@@ -7,6 +7,7 @@ handles FORM_COMPLETE data, and records the assistant message.
 """
 
 import logging
+import re
 
 from backend.agent.state import FormPilotState
 
@@ -34,6 +35,11 @@ def finalize_node(state: FormPilotState) -> dict:
     pending_text_value = state.get("pending_text_value")
     pending_text_field_id = state.get("pending_text_field_id")
     current_answers = dict(state.get("answers", {}))
+    required_by_step = state.get("required_fields_by_step", {})
+    current_step = state.get("current_step", 1)
+    max_step = state.get("max_step", 1)
+    completed_steps = set(state.get("completed_steps", []))
+    field_prompt_map = state.get("field_prompt_map", {})
 
     action_type = parsed.get("action", "")
     field_id = parsed.get("field_id")
@@ -107,9 +113,64 @@ def finalize_node(state: FormPilotState) -> dict:
         history_entries.append({"role": "assistant", "content": msg})
 
     updates["action"] = parsed
+    updates["allow_answered_field_update"] = False
     if answers_update:
         updates["answers"] = answers_update
     if history_entries:
         updates["conversation_history"] = history_entries
 
+    # --- Step checkpoint (human-in-the-loop) ---
+    # In multi-step forms, after collecting all required fields for the
+    # current step, pause and ask the user to confirm before moving on.
+    merged_answers = dict(current_answers)
+    merged_answers.update(answers_update)
+    step_required = required_by_step.get(current_step, [])
+    is_multi_step = bool(required_by_step) and max_step > 1
+    step_complete = bool(step_required) and all(fid in merged_answers for fid in step_required)
+    is_last_step = current_step >= max_step
+
+    if (
+        is_multi_step
+        and step_complete
+        and current_step not in completed_steps
+        and not is_last_step
+    ):
+        summary_text = _build_step_summary(
+            step=current_step,
+            field_ids=step_required,
+            answers=merged_answers,
+            field_prompt_map=field_prompt_map,
+        )
+        updates["action"] = {"action": "MESSAGE", "text": summary_text}
+        updates["pending_field_id"] = None
+        updates["pending_action_type"] = None
+        updates["pending_tool_name"] = None
+        updates["awaiting_step_confirmation"] = True
+        updates["conversation_history"] = [{"role": "assistant", "content": summary_text}]
+
     return updates
+
+
+def _build_step_summary(
+    step: int,
+    field_ids: list[str],
+    answers: dict,
+    field_prompt_map: dict[str, str],
+) -> str:
+    lines = [f"Step {step} is complete. Here is a quick summary:"]
+    for field_id in field_ids:
+        label = field_prompt_map.get(field_id) or _field_id_to_label(field_id)
+        value = answers.get(field_id, "")
+        lines.append(f"- {label}: {value}")
+    lines.append(
+        "Please confirm to continue to the next step, "
+        "or tell me what you want to change in this step."
+    )
+    return "\n".join(lines)
+
+
+def _field_id_to_label(field_id: str) -> str:
+    # Convert camelCase/snake_case IDs to readable labels.
+    words = field_id.replace("_", " ")
+    words = re.sub(r"([a-z])([A-Z])", r"\1 \2", words)
+    return words.strip().capitalize()

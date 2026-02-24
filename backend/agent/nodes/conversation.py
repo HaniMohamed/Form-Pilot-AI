@@ -36,6 +36,10 @@ async def conversation_node(state: FormPilotState) -> dict:
     answers = dict(state.get("answers", {}))
     conversation_history = list(state.get("conversation_history", []))
     required_fields = state.get("required_fields", [])
+    required_fields_by_step = state.get("required_fields_by_step", {})
+    current_step = state.get("current_step", 1)
+    max_step = state.get("max_step", 1)
+    allow_answered_field_update = state.get("allow_answered_field_update", False)
     initial_extraction_done = state.get("initial_extraction_done", False)
     user_message_added = state.get("user_message_added", False)
 
@@ -49,12 +53,16 @@ async def conversation_node(state: FormPilotState) -> dict:
     # for constructing the LLM message list
     full_history = conversation_history + history_entries
 
+    active_required_fields = required_fields
+    if required_fields_by_step and current_step in required_fields_by_step:
+        active_required_fields = required_fields_by_step[current_step]
+
     # Build system prompt with form context and current state
     system_prompt = build_system_prompt(
         form_context_md=form_context_md,
         answers=answers,
         conversation_history=full_history,
-        required_fields=required_fields,
+        required_fields=active_required_fields,
     )
 
     messages = [SystemMessage(content=system_prompt)]
@@ -76,6 +84,9 @@ async def conversation_node(state: FormPilotState) -> dict:
         answers=answers,
         initial_extraction_done=initial_extraction_done,
         required_fields=required_fields,
+        current_step=current_step,
+        max_step=max_step,
+        allow_answered_field_update=allow_answered_field_update,
     )
 
     updates: dict = {

@@ -76,6 +76,17 @@ def _has_recent_validation_directive(messages: list) -> bool:
     return False
 
 
+def _has_recent_update_directive(messages: list) -> bool:
+    """Detect edit-mode directives that allow updating answered fields."""
+    for msg in reversed(messages[-8:]):
+        content = getattr(msg, "content", "")
+        if not isinstance(content, str):
+            continue
+        if "requested changes before confirming Step" in content:
+            return True
+    return False
+
+
 # ---------------------------------------------------------------------------
 # JSON extraction
 # ---------------------------------------------------------------------------
@@ -279,6 +290,9 @@ async def call_llm_with_retry(
     answers: dict[str, Any],
     initial_extraction_done: bool,
     required_fields: list[str],
+    current_step: int = 1,
+    max_step: int = 1,
+    allow_answered_field_update: bool = False,
 ) -> dict | None:
     """Call the LLM and parse its JSON response, with retries and guards.
 
@@ -342,6 +356,8 @@ async def call_llm_with_retry(
                     action.startswith("ASK_")
                     and asked_field
                     and asked_field in answers
+                    and not allow_answered_field_update
+                    and not _has_recent_update_directive(messages)
                 ):
                     logger.warning(
                         "LLM re-asked already answered field '%s' — "
@@ -429,6 +445,20 @@ async def call_llm_with_retry(
 
                 # Catch premature FORM_COMPLETE — required fields still missing
                 if action == "FORM_COMPLETE" and required_fields:
+                    if current_step < max_step:
+                        logger.warning(
+                            "LLM returned FORM_COMPLETE before final step "
+                            "(current_step=%s, max_step=%s)",
+                            current_step,
+                            max_step,
+                        )
+                        messages.append(HumanMessage(content=(
+                            f"WRONG. You are currently in Step {current_step} of "
+                            f"{max_step}. Do NOT return FORM_COMPLETE yet. "
+                            "Continue with the next required field."
+                        )))
+                        continue
+
                     missing = [
                         fid for fid in required_fields
                         if fid not in answers

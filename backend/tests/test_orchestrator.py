@@ -43,6 +43,25 @@ TOOL_FORM_MD = """
 - **name** (text, required): Your name?
 """
 
+STEP_FORM_MD = """
+---
+form_id: step_test_form
+title: Step Test Form
+fields:
+  - id: name
+    type: text
+    required: true
+    step: 1
+    prompt: "What is your name?"
+  - id: reason
+    type: text
+    required: true
+    step: 2
+    prompt: "What is the reason?"
+---
+# Step Test Form
+"""
+
 
 # --- Mock LLM ---
 
@@ -499,3 +518,65 @@ class TestAnswerTracking:
         await orch.process_user_message("Alice")
         assert "name" in orch.get_answers()
         assert orch.get_answers()["name"] == "Alice"
+
+
+class TestStepConfirmationFlow:
+    """Multi-step forms require user confirmation between steps."""
+
+    @pytest.mark.asyncio
+    async def test_step_summary_then_confirm_to_next_step(self):
+        llm = MockLLM([
+            {"intent": "multi_answer", "answers": {}, "message": "Let's start."},
+            {"action": "ASK_TEXT", "field_id": "name",
+             "label": "Name?", "message": "What is your name?"},
+            # Turn 2 (validation/conversation) - finalize will intercept with summary
+            {"action": "ASK_TEXT", "field_id": "reason",
+             "label": "Reason?", "message": "What is the reason?"},
+            # Turn 3 (after user confirms step 1)
+            {"action": "ASK_TEXT", "field_id": "reason",
+             "label": "Reason?", "message": "What is the reason?"},
+        ])
+        orch = GraphRunner(STEP_FORM_MD, llm)
+        orch.get_initial_action()
+
+        r1 = await orch.process_user_message("hi")
+        assert r1["action"] == "ASK_TEXT"
+        assert r1["field_id"] == "name"
+
+        r2 = await orch.process_user_message("Alice")
+        assert r2["action"] == "MESSAGE"
+        assert "Step 1 is complete" in r2["text"]
+        assert "Please confirm to continue" in r2["text"]
+
+        r3 = await orch.process_user_message("yes, continue")
+        assert r3["action"] == "ASK_TEXT"
+        assert r3["field_id"] == "reason"
+
+    @pytest.mark.asyncio
+    async def test_user_can_request_update_before_confirming_step(self):
+        llm = MockLLM([
+            {"intent": "multi_answer", "answers": {}, "message": "Let's start."},
+            {"action": "ASK_TEXT", "field_id": "name",
+             "label": "Name?", "message": "What is your name?"},
+            # Turn 2 (validation/conversation) - finalize will intercept with summary
+            {"action": "ASK_TEXT", "field_id": "reason",
+             "label": "Reason?", "message": "What is the reason?"},
+            # Turn 4 (after update, step should summarize again)
+            {"action": "ASK_TEXT", "field_id": "reason",
+             "label": "Reason?", "message": "What is the reason?"},
+        ])
+        orch = GraphRunner(STEP_FORM_MD, llm)
+        orch.get_initial_action()
+
+        await orch.process_user_message("hi")
+        summary = await orch.process_user_message("Alice")
+        assert summary["action"] == "MESSAGE"
+        assert "Step 1 is complete" in summary["text"]
+
+        reopen = await orch.process_user_message("I want to change my name")
+        assert reopen["action"] == "ASK_TEXT"
+        assert reopen["field_id"] == "name"
+
+        summary_again = await orch.process_user_message("Alicia")
+        assert summary_again["action"] == "MESSAGE"
+        assert "Step 1 is complete" in summary_again["text"]

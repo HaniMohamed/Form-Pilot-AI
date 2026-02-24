@@ -136,6 +136,43 @@ def get_field_type_map(frontmatter: dict[str, Any]) -> dict[str, str]:
     return type_map
 
 
+def get_required_fields_by_step(frontmatter: dict[str, Any]) -> dict[int, list[str]]:
+    """Group required field IDs by step number from frontmatter.
+
+    Uses the field's ``step`` value when present. If missing/invalid,
+    defaults to step 1.
+    """
+    by_step: dict[int, list[str]] = {}
+    for field in extract_fields(frontmatter):
+        field_id = field.get("id", "")
+        req = field.get("required", False)
+        is_required = req is True or (isinstance(req, str) and req.lower() == "true")
+        if not field_id or not is_required:
+            continue
+
+        step_raw = field.get("step", 1)
+        try:
+            step_num = int(step_raw)
+            if step_num < 1:
+                step_num = 1
+        except (TypeError, ValueError):
+            step_num = 1
+
+        by_step.setdefault(step_num, []).append(field_id)
+    return by_step
+
+
+def get_field_prompt_map(frontmatter: dict[str, Any]) -> dict[str, str]:
+    """Build a field_id -> human prompt/label mapping from frontmatter."""
+    prompt_map: dict[str, str] = {}
+    for field in extract_fields(frontmatter):
+        field_id = field.get("id", "")
+        prompt = field.get("prompt", "")
+        if field_id and isinstance(prompt, str) and prompt.strip():
+            prompt_map[field_id] = prompt.strip()
+    return prompt_map
+
+
 def get_title(frontmatter: dict[str, Any]) -> str:
     """Get the form title from frontmatter.
 

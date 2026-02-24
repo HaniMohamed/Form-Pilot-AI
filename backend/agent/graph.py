@@ -25,9 +25,15 @@ from backend.agent.nodes.conversation import conversation_node
 from backend.agent.nodes.extraction import extraction_node
 from backend.agent.nodes.finalize import finalize_node
 from backend.agent.nodes.greeting import greeting_node
+from backend.agent.nodes.step_confirmation import step_confirmation_node
 from backend.agent.nodes.tool_handler import tool_handler_node
 from backend.agent.nodes.validation import validate_input_node
 from backend.agent.prompts import extract_field_type_map, extract_required_field_ids
+from backend.agent.frontmatter import (
+    get_field_prompt_map,
+    get_required_fields_by_step,
+    parse_frontmatter,
+)
 from backend.agent.state import FormPilotState
 
 logger = logging.getLogger(__name__)
@@ -53,6 +59,7 @@ def route_input(state: FormPilotState) -> str:
     conversation_history = state.get("conversation_history", [])
     pending_field_id = state.get("pending_field_id")
     initial_extraction_done = state.get("initial_extraction_done", False)
+    awaiting_step_confirmation = state.get("awaiting_step_confirmation", False)
 
     # New session with empty message — return greeting
     if not conversation_history and not user_message.strip():
@@ -61,6 +68,10 @@ def route_input(state: FormPilotState) -> str:
     # Tool results from frontend — process them first
     if tool_results:
         return "tool_handler"
+
+    # Step checkpoint is active — user must confirm or request edits
+    if awaiting_step_confirmation and user_message.strip():
+        return "step_confirmation"
 
     # User answered a pending field — validate the answer
     if pending_field_id and user_message.strip():
@@ -83,6 +94,13 @@ def route_after_extraction(state: FormPilotState) -> str:
     """
     if state.get("parsed_llm_response") is not None:
         return "finalize"
+    return "conversation"
+
+
+def route_after_step_confirmation(state: FormPilotState) -> str:
+    """Route after step confirmation handling."""
+    if state.get("skip_conversation_turn"):
+        return END
     return "conversation"
 
 
@@ -114,6 +132,7 @@ def build_graph() -> StateGraph:
     # Register nodes
     graph.add_node("greeting", greeting_node)
     graph.add_node("tool_handler", tool_handler_node)
+    graph.add_node("step_confirmation", step_confirmation_node)
     graph.add_node("validate_input", validate_input_node)
     graph.add_node("extraction", extraction_node)
     graph.add_node("conversation", conversation_node)
@@ -123,6 +142,7 @@ def build_graph() -> StateGraph:
     graph.add_conditional_edges(START, route_input, {
         "greeting": "greeting",
         "tool_handler": "tool_handler",
+        "step_confirmation": "step_confirmation",
         "validate_input": "validate_input",
         "extraction": "extraction",
         "conversation": "conversation",
@@ -133,6 +153,10 @@ def build_graph() -> StateGraph:
 
     # Tool handler and validation always feed into conversation
     graph.add_edge("tool_handler", "conversation")
+    graph.add_conditional_edges("step_confirmation", route_after_step_confirmation, {
+        "conversation": "conversation",
+        END: END,
+    })
     graph.add_edge("validate_input", "conversation")
 
     # Extraction routes conditionally: direct action → finalize,
@@ -186,6 +210,13 @@ def create_initial_state(
     Returns:
         A fully initialized FormPilotState dict.
     """
+    frontmatter, _ = parse_frontmatter(form_context_md)
+    required_by_step = get_required_fields_by_step(frontmatter) if frontmatter else {}
+    if required_by_step:
+        max_step = max(required_by_step.keys())
+    else:
+        max_step = 1
+
     return FormPilotState(
         form_context_md=form_context_md,
         llm=llm,
@@ -194,8 +225,15 @@ def create_initial_state(
         answers={},
         conversation_history=[],
         required_fields=extract_required_field_ids(form_context_md),
+        required_fields_by_step=required_by_step,
+        field_prompt_map=get_field_prompt_map(frontmatter) if frontmatter else {},
         field_types=extract_field_type_map(form_context_md),
         initial_extraction_done=False,
+        current_step=1,
+        max_step=max_step,
+        completed_steps=[],
+        awaiting_step_confirmation=False,
+        allow_answered_field_update=False,
         pending_field_id=None,
         pending_action_type=None,
         pending_text_value=None,
@@ -204,6 +242,7 @@ def create_initial_state(
         action={},
         parsed_llm_response=None,
         user_message_added=False,
+        skip_conversation_turn=False,
     )
 
 
@@ -231,4 +270,6 @@ def prepare_turn_input(
     updated["action"] = {}
     updated["parsed_llm_response"] = None
     updated["user_message_added"] = False
+    updated["skip_conversation_turn"] = False
+    updated["allow_answered_field_update"] = False
     return FormPilotState(**updated)

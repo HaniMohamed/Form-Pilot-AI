@@ -42,10 +42,17 @@ class FormPilotState(TypedDict, total=False):
     answers: Annotated[dict[str, Any], merge_answers]
     conversation_history: Annotated[list[dict[str, str]], add]
     required_fields: list[str]
+    required_fields_by_step: dict[int, list[str]]
+    field_prompt_map: dict[str, str]
     field_types: dict[str, str]
 
     # --- Phase tracking ---
     initial_extraction_done: bool
+    current_step: int
+    max_step: int
+    completed_steps: list[int]
+    awaiting_step_confirmation: bool
+    allow_answered_field_update: bool
     pending_field_id: str | None
     pending_action_type: str | None
     pending_text_value: str | None
@@ -60,3 +67,5 @@ class FormPilotState(TypedDict, total=False):
     parsed_llm_response: dict | None
     # Whether the user_message has been added to conversation_history this turn
     user_message_added: bool
+    # Whether to stop turn after step_confirmation node (skip conversation node)
+    skip_conversation_turn: bool

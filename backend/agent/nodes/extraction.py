@@ -33,6 +33,8 @@ async def extraction_node(state: FormPilotState) -> dict:
     field_types = state.get("field_types", {})
     answers = dict(state.get("answers", {}))
     required_fields = state.get("required_fields", [])
+    current_step = state.get("current_step", 1)
+    max_step = state.get("max_step", 1)
 
     # Add user message to history
     history_entries: list[dict[str, str]] = []
@@ -59,6 +61,8 @@ async def extraction_node(state: FormPilotState) -> dict:
         answers=answers,
         initial_extraction_done=True,
         required_fields=required_fields,
+        current_step=current_step,
+        max_step=max_step,
     )
 
     if parsed is None:
