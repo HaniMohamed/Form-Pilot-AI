@@ -61,6 +61,7 @@ def validate_input_node(state: FormPilotState) -> dict:
                 f"'{pending_field_id}' using ASK_TEXT. "
                 f"Politely tell the user why their answer doesn't fit "
                 f"and ask again in a clearer way. "
+                f"Keep the same language as the user's message. "
                 f"IMPORTANT: Do NOT repeat your previous wording exactly. "
                 f"Previous assistant message: '{last_assistant_message}']"
             ),
@@ -109,6 +110,7 @@ def validate_input_node(state: FormPilotState) -> dict:
                     f"with field_id '{pending_field_id}'. "
                     f"Tell the user their input was not valid and "
                     f"ask again in a warmer, more human way. "
+                    f"Keep the same language as the user's message. "
                     f"Do NOT repeat your previous wording exactly. "
                     f"Previous assistant message: '{last_assistant_message}']"
                 ),

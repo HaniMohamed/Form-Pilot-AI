@@ -374,7 +374,7 @@ async def call_llm_with_retry(
                             "WRONG re-ask style. You repeated your previous question "
                             "word-for-word. Re-ask the SAME field with NEW wording, "
                             "a brief empathetic acknowledgment, and one clear example "
-                            "of the expected format."
+                            "of the expected format. Keep it short and natural."
                         )))
                         continue
 

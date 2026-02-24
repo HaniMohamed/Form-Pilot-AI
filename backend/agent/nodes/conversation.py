@@ -86,7 +86,7 @@ async def conversation_node(state: FormPilotState) -> dict:
     if parsed is None:
         # LLM completely failed — return fallback action directly
         fallback_text = (
-            "I'm sorry, I had trouble understanding. Could you try again?"
+            "Sorry, I had trouble understanding that. Could you try again in one short sentence?"
         )
         updates["action"] = build_message_action(fallback_text)
         updates["parsed_llm_response"] = None
