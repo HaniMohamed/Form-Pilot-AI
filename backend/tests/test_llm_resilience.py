@@ -354,3 +354,51 @@ class TestRetryMechanism:
         assert "action" in action
         # No answer should be stored since extraction failed
         assert orch.answers.get("leave_type") is None or orch.answers.get("leave_type") == "X"
+
+
+class TestReaskHumanization:
+    """Invalid-answer retries should avoid verbatim robotic repeats."""
+
+    @pytest.mark.asyncio
+    async def test_invalid_reask_is_rephrased_not_verbatim(self):
+        """If LLM repeats the same re-ask text, guard should force rephrase."""
+        first_question = "When is your leave start date?"
+        rephrased_question = (
+            "No worries, I still need the start date. "
+            "Please share it like 2026-03-01."
+        )
+        llm = RawTextLLM([
+            # Turn 1: extraction + first question
+            json.dumps({"intent": "multi_answer", "answers": {}, "message": "Let's begin."}),
+            json.dumps({
+                "action": "ASK_DATE",
+                "field_id": "start_date",
+                "label": "Start date?",
+                "message": first_question,
+            }),
+            # Turn 2: invalid date -> first retry repeats verbatim (should be rejected)
+            json.dumps({
+                "action": "ASK_DATE",
+                "field_id": "start_date",
+                "label": "Start date?",
+                "message": first_question,
+            }),
+            # Turn 2 retry: rephrased message (should be accepted)
+            json.dumps({
+                "action": "ASK_DATE",
+                "field_id": "start_date",
+                "label": "Start date?",
+                "message": rephrased_question,
+            }),
+        ])
+
+        orch = GraphRunner(LEAVE_FORM_MD, llm)
+        orch.get_initial_action()
+        first_action = await orch.process_user_message("I want leave")
+        assert first_action["action"] == "ASK_DATE"
+        assert first_action["message"] == first_question
+
+        followup = await orch.process_user_message("banana")
+        assert followup["action"] == "ASK_DATE"
+        assert followup["message"] == rephrased_question
+        assert followup["message"] != first_question

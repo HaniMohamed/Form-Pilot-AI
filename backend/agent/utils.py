@@ -7,6 +7,7 @@ LLM call-with-retry helper used by both extraction and conversation nodes.
 
 import json
 import logging
+import re
 from datetime import date, datetime
 from typing import Any
 
@@ -46,6 +47,33 @@ JSON_RETRY_PROMPT = (
 
 # Maximum conversation history messages to include in LLM context
 MAX_HISTORY_MESSAGES = 30
+
+
+def _normalize_text(value: str) -> str:
+    """Normalize text for lenient equality checks."""
+    return re.sub(r"\s+", " ", value.strip().lower())
+
+
+def _last_assistant_message(messages: list) -> str:
+    """Return the most recent AI message content from message history."""
+    for msg in reversed(messages):
+        msg_type = msg.__class__.__name__
+        if msg_type == "AIMessage":
+            content = getattr(msg, "content", "")
+            if isinstance(content, str) and content.strip():
+                return content.strip()
+    return ""
+
+
+def _has_recent_validation_directive(messages: list) -> bool:
+    """Detect whether the current turn is handling an invalid user answer."""
+    for msg in reversed(messages[-8:]):
+        content = getattr(msg, "content", "")
+        if not isinstance(content, str):
+            continue
+        if "is INVALID" in content or "VALIDATE this answer" in content:
+            return True
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -327,6 +355,28 @@ async def call_llm_with_retry(
                         "Ask the NEXT unanswered field instead."
                     )))
                     continue
+
+                # If we are in validation-reask mode, prevent verbatim repeats
+                # that feel robotic. Force the LLM to rephrase.
+                if action.startswith("ASK_") and _has_recent_validation_directive(messages):
+                    ask_message = str(parsed.get("message", "")).strip()
+                    previous_assistant = _last_assistant_message(messages)
+                    if (
+                        ask_message
+                        and previous_assistant
+                        and _normalize_text(ask_message) == _normalize_text(previous_assistant)
+                    ):
+                        logger.warning(
+                            "LLM repeated ASK message verbatim during validation for field '%s' — retrying with rephrase instruction",
+                            asked_field or "?",
+                        )
+                        messages.append(HumanMessage(content=(
+                            "WRONG re-ask style. You repeated your previous question "
+                            "word-for-word. Re-ask the SAME field with NEW wording, "
+                            "a brief empathetic acknowledgment, and one clear example "
+                            "of the expected format."
+                        )))
+                        continue
 
                 # Catch MESSAGE during active form filling —
                 # the model is asking a question without using ASK_* format

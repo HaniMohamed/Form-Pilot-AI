@@ -27,11 +27,17 @@ def validate_input_node(state: FormPilotState) -> dict:
     user_message = state.get("user_message", "")
     pending_field_id = state.get("pending_field_id")
     pending_action_type = state.get("pending_action_type")
+    conversation_history = state.get("conversation_history", [])
     raw_answer = user_message.strip()
 
     history_entries: list[dict[str, str]] = []
     answers_update: dict = {}
     updates: dict = {"user_message_added": True}
+    last_assistant_message = ""
+    for msg in reversed(conversation_history):
+        if msg.get("role") == "assistant":
+            last_assistant_message = str(msg.get("content", "")).strip()
+            break
 
     if pending_action_type == "ASK_TEXT":
         # --- Context validation path (LLM decides) ---
@@ -54,7 +60,9 @@ def validate_input_node(state: FormPilotState) -> dict:
                 f"wrong context) — re-ask the SAME field "
                 f"'{pending_field_id}' using ASK_TEXT. "
                 f"Politely tell the user why their answer doesn't fit "
-                f"and ask again in a clearer way.]"
+                f"and ask again in a clearer way. "
+                f"IMPORTANT: Do NOT repeat your previous wording exactly. "
+                f"Previous assistant message: '{last_assistant_message}']"
             ),
         })
         updates.update({
@@ -100,7 +108,9 @@ def validate_input_node(state: FormPilotState) -> dict:
                     f"{pending_action_type} "
                     f"with field_id '{pending_field_id}'. "
                     f"Tell the user their input was not valid and "
-                    f"ask again.]"
+                    f"ask again in a warmer, more human way. "
+                    f"Do NOT repeat your previous wording exactly. "
+                    f"Previous assistant message: '{last_assistant_message}']"
                 ),
             })
             # Don't clear pending_field_id — the LLM will re-ask
