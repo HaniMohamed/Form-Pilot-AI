@@ -402,3 +402,45 @@ class TestReaskHumanization:
         assert followup["action"] == "ASK_DATE"
         assert followup["message"] == rephrased_question
         assert followup["message"] != first_question
+
+
+class TestPydanticPayloadValidation:
+    """LLM JSON payloads are validated via pydantic schemas."""
+
+    @pytest.mark.asyncio
+    async def test_missing_required_action_field_retries(self):
+        """ASK_TEXT without field_id is rejected and retried."""
+        llm = RawTextLLM([
+            # Extraction succeeds
+            json.dumps({"intent": "multi_answer", "answers": {}, "message": "Start"}),
+            # Conversation 1: invalid shape (missing field_id)
+            json.dumps({"action": "ASK_TEXT", "message": "What is your leave type?"}),
+            # Conversation retry: valid shape
+            json.dumps({
+                "action": "ASK_TEXT",
+                "field_id": "leave_type",
+                "label": "Leave type?",
+                "message": "What is your leave type?",
+            }),
+        ])
+        orch = GraphRunner(LEAVE_FORM_MD, llm)
+        orch.get_initial_action()
+
+        action = await orch.process_user_message("hello")
+        assert action["action"] == "ASK_TEXT"
+        assert action["field_id"] == "leave_type"
+        assert llm.call_count >= 3
+
+    @pytest.mark.asyncio
+    async def test_message_payload_accepts_message_only_and_normalizes(self):
+        """MESSAGE payload with only 'message' is normalized to include text."""
+        llm = RawTextLLM([
+            json.dumps({"intent": "multi_answer", "answers": {}, "message": "Start"}),
+            json.dumps({"action": "MESSAGE", "message": "I can help with that."}),
+        ])
+        orch = GraphRunner(LEAVE_FORM_MD, llm)
+        orch.get_initial_action()
+
+        action = await orch.process_user_message("hello")
+        assert action["action"] == "MESSAGE"
+        assert action["text"] == "I can help with that."

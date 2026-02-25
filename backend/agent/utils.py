@@ -14,6 +14,8 @@ from typing import Any
 from dateutil import parser as dateutil_parser
 from langchain_core.messages import HumanMessage
 
+from backend.agent.llm_payloads import validate_llm_payload
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -329,6 +331,15 @@ async def call_llm_with_retry(
 
             parsed = extract_json(content)
             if parsed is not None:
+                if not isinstance(parsed, dict):
+                    logger.warning(
+                        "LLM returned JSON that is not an object (attempt %d/%d)",
+                        attempt + 1,
+                        MAX_JSON_RETRIES + 1,
+                    )
+                    messages.append(HumanMessage(content=JSON_RETRY_PROMPT))
+                    continue
+
                 # Validate action type — LLM sometimes invents types
                 action = parsed.get("action", "")
                 intent = parsed.get("intent", "")
@@ -348,6 +359,24 @@ async def call_llm_with_retry(
                     # Otherwise retry — it's gibberish
                     messages.append(HumanMessage(content=JSON_RETRY_PROMPT))
                     continue
+
+                normalized, schema_error = validate_llm_payload(parsed)
+                if normalized is None:
+                    logger.warning(
+                        "LLM returned schema-invalid payload (attempt %d/%d): %s",
+                        attempt + 1,
+                        MAX_JSON_RETRIES + 1,
+                        schema_error,
+                    )
+                    messages.append(HumanMessage(content=(
+                        "WRONG JSON shape. Your JSON must match one valid response "
+                        "schema exactly (required keys and types). "
+                        "Return ONLY one valid JSON object now."
+                    )))
+                    continue
+                parsed = normalized
+                action = parsed.get("action", "")
+                intent = parsed.get("intent", "")
 
                 # Catch ASK_* for a field that's already answered —
                 # the model is re-asking instead of moving forward
