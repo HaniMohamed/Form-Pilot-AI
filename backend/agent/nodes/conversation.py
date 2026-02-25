@@ -76,6 +76,8 @@ async def conversation_node(state: FormPilotState) -> dict:
             messages.append(HumanMessage(content=content))
         elif role == "assistant":
             messages.append(AIMessage(content=content))
+        elif role == "system":
+            messages.append(SystemMessage(content=content))
 
     # Call LLM with retry and guard validation
     parsed = await call_llm_with_retry(

@@ -353,7 +353,7 @@ def condense_form_context(form_context_md: str) -> str:
 
     # If already short enough, return as-is
     if len(lines) <= _MAX_CONTEXT_LINES:
-        return form_context_md
+        return source
 
     # Try extracting key sections by heading
     extracted = _extract_key_sections(lines)

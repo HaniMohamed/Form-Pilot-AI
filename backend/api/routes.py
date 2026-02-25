@@ -109,7 +109,8 @@ async def chat(request: ChatRequest):
 
     # Invoke the LangGraph state machine
     try:
-        result_state = await _graph.ainvoke(turn_state)
+        run_config = {"configurable": {"thread_id": conversation_id}}
+        result_state = await _graph.ainvoke(turn_state, config=run_config)
     except Exception as e:
         logger.error("Error processing message: %s", e, exc_info=True)
         raise HTTPException(

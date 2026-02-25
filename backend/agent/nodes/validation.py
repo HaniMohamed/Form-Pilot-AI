@@ -49,7 +49,7 @@ def validate_input_node(state: FormPilotState) -> dict:
         )
         history_entries.append({"role": "user", "content": user_message})
         history_entries.append({
-            "role": "user",
+            "role": "system",
             "content": (
                 f"[SYSTEM: The user answered '{raw_answer}' for field "
                 f"'{pending_field_id}'. "
@@ -100,7 +100,7 @@ def validate_input_node(state: FormPilotState) -> dict:
             )
             history_entries.append({"role": "user", "content": user_message})
             history_entries.append({
-                "role": "user",
+                "role": "system",
                 "content": (
                     f"[SYSTEM: The user's answer '{raw_answer}' for field "
                     f"'{pending_field_id}' is INVALID. "

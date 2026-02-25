@@ -52,7 +52,7 @@ def step_confirmation_node(state: FormPilotState) -> dict:
 
         # Add lightweight directive so conversation naturally starts next step.
         updates["conversation_history"] = updates["conversation_history"] + [{
-            "role": "user",
+            "role": "system",
             "content": (
                 f"[SYSTEM: The user confirmed Step {current_step}. "
                 "Proceed to the next step now. Ask the next required unanswered field.]"
@@ -94,7 +94,7 @@ def step_confirmation_node(state: FormPilotState) -> dict:
             return updates
 
         updates["conversation_history"] = updates["conversation_history"] + [{
-            "role": "user",
+            "role": "system",
             "content": (
                 f"[SYSTEM: The user requested changes before confirming Step {current_step}. "
                 f"Step {current_step} fields: {step_fields}. "

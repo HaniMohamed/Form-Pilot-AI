@@ -46,7 +46,7 @@ def tool_handler_node(state: FormPilotState) -> dict:
                 "\n\n[INSTRUCTION: Use the data above to continue the form. "
                 "Return the appropriate JSON action.]"
             )
-        history_entries.append({"role": "user", "content": directive})
+        history_entries.append({"role": "system", "content": directive})
 
     # Add user message to history if non-empty
     if user_message.strip():

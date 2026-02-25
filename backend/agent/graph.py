@@ -179,13 +179,15 @@ def build_graph() -> StateGraph:
     return graph
 
 
-def compile_graph():
+def compile_graph(checkpointer: Any | None = None):
     """Build and compile the FormPilot AI graph.
 
     Returns:
         A compiled graph ready for invocation via ainvoke().
     """
     graph = build_graph()
+    if checkpointer is not None:
+        return graph.compile(checkpointer=checkpointer)
     return graph.compile()
 
 

@@ -17,35 +17,50 @@ from langchain_core.language_models import BaseChatModel
 
 load_dotenv()
 
+def _is_truthy(value: str | None, default: bool = False) -> bool:
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _build_safe_curl(request: httpx.Request) -> str:
+    """Build a debug curl command with sensitive headers redacted."""
+    curl = f"curl -X {request.method} '{request.url}'"
+    for key, value in request.headers.items():
+        header_value = value
+        if key.lower() in {"authorization", "x-api-key", "api-key"}:
+            header_value = "[REDACTED]"
+        curl += f" -H '{key}: {header_value}'"
+
+    if request.content:
+        body = request.content.decode(errors="ignore")
+        max_body_chars = 2000
+        if len(body) > max_body_chars:
+            body = body[:max_body_chars] + "... [TRUNCATED]"
+        curl += f" -d '{body}'"
+    return curl
+
+
 class CurlLoggingClient(httpx.Client):
     def send(self, request, *args, **kwargs):
-        curl = f"curl -X {request.method} '{request.url}'"
-
-        for k, v in request.headers.items():
-            curl += f" -H '{k}: {v}'"
-
-        if request.content:
-            body = request.content.decode()
-            curl += f" -d '{body}'"
-
-        print("\n==== CURL ====\n", curl, "\n==============\n")
-
+        if _is_truthy(os.getenv("LOG_LLM_CURL"), default=False):
+            print(
+                "\n==== CURL (sanitized) ====\n",
+                _build_safe_curl(request),
+                "\n==========================\n",
+            )
         return super().send(request, *args, **kwargs)
+
 
 class CurlLoggingAsyncClient(httpx.AsyncClient):
-    def send(self, request, *args, **kwargs):
-        curl = f"curl -X {request.method} '{request.url}'"
-
-        for k, v in request.headers.items():
-            curl += f" -H '{k}: {v}'"
-
-        if request.content:
-            body = request.content.decode()
-            curl += f" -d '{body}'"
-
-        print("\n==== CURL ====\n", curl, "\n==============\n")
-
-        return super().send(request, *args, **kwargs)
+    async def send(self, request, *args, **kwargs):
+        if _is_truthy(os.getenv("LOG_LLM_CURL"), default=False):
+            print(
+                "\n==== CURL (sanitized) ====\n",
+                _build_safe_curl(request),
+                "\n==========================\n",
+            )
+        return await super().send(request, *args, **kwargs)
 
 
 def get_llm(**kwargs) -> BaseChatModel:
@@ -70,8 +85,8 @@ def get_llm(**kwargs) -> BaseChatModel:
     """
     from langchain_openai import ChatOpenAI
 
-    # Sensible defaults — can be overridden via kwargs
-    # request_timeout covers slow local models (e.g. Ollama with large context)
+    # Sensible defaults — can be overridden via kwargs.
+    # request_timeout covers slow local models (e.g. Ollama with large context).
     defaults = {"temperature": 0, "max_tokens": 1024, "request_timeout": 300}
     merged = {**defaults, **kwargs}
 
@@ -88,17 +103,21 @@ def get_llm(**kwargs) -> BaseChatModel:
         if base_url.endswith(suffix):
             base_url = base_url[: -len(suffix)]
             break
-        
-    client = CurlLoggingClient(verify=False)
-    asycn_client = CurlLoggingAsyncClient(verify=False)
-    
+
+    verify_ssl = _is_truthy(os.getenv("LLM_SSL_VERIFY"), default=True)
+    client = CurlLoggingClient(verify=verify_ssl)
+    async_client = CurlLoggingAsyncClient(verify=verify_ssl)
+
+    api_key = merged.pop("api_key", os.getenv("CUSTOM_LLM_API_KEY"))
+    model = merged.pop("model", os.getenv("CUSTOM_LLM_MODEL_NAME", "default"))
+
     llm = ChatOpenAI(
-        api_key=os.getenv("CUSTOM_LLM_API_KEY"),
-        model=os.getenv("CUSTOM_LLM_MODEL_NAME", "default"),
+        api_key=api_key,
+        model=model,
         base_url=base_url,
         http_client=client,
-        http_async_client=asycn_client,
-        model_kwargs={},
+        http_async_client=async_client,
+        **merged,
     )
-   
+
     return llm

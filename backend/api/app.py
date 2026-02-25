@@ -14,6 +14,7 @@ import os
 from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from langgraph.checkpoint.memory import MemorySaver
 
 from backend.agent.graph import compile_graph
 from backend.agent.llm_provider import get_llm
@@ -29,6 +30,12 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 logger = logging.getLogger(__name__)
+
+
+def _is_truthy(value: str | None, default: bool = False) -> bool:
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
 def create_app() -> FastAPI:
@@ -62,9 +69,14 @@ def create_app() -> FastAPI:
         )
         llm = None
 
-    # Compile the LangGraph state machine (once, shared across all sessions)
-    graph = compile_graph()
+    # Compile the LangGraph state machine (once, shared across all sessions).
+    # Optional checkpointer helps with replay/debug and future persistence upgrades.
+    enable_checkpointer = _is_truthy(os.getenv("ENABLE_LANGGRAPH_CHECKPOINTER"), default=False)
+    checkpointer = MemorySaver() if enable_checkpointer else None
+    graph = compile_graph(checkpointer=checkpointer)
     logger.info("LangGraph compiled successfully")
+    if enable_checkpointer:
+        logger.info("LangGraph checkpointer enabled: MemorySaver")
 
     # Initialize session store
     session_timeout = int(os.getenv("SESSION_TIMEOUT_SECONDS", "1800"))
