@@ -19,7 +19,7 @@ from langgraph.checkpoint.memory import MemorySaver
 from backend.agent.graph import compile_graph
 from backend.agent.llm_provider import get_llm
 from backend.api.routes import configure_routes, router
-from backend.core.session import SessionStore
+from backend.core.session import DEFAULT_SESSION_TIMEOUT_SECONDS, SQLiteSessionStore, SessionStore
 
 # Load environment variables from .env
 load_dotenv()
@@ -36,6 +36,19 @@ def _is_truthy(value: str | None, default: bool = False) -> bool:
     if value is None:
         return default
     return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _build_session_store(timeout_seconds: int):
+    backend = os.getenv("SESSION_BACKEND", "memory").strip().lower()
+    if backend == "sqlite":
+        db_path = os.getenv("SESSION_SQLITE_PATH", "./backend/data/sessions.db")
+        logger.info("Using SQLite session backend: %s", db_path)
+        return SQLiteSessionStore(
+            db_path=db_path,
+            timeout_seconds=timeout_seconds,
+        )
+    logger.info("Using in-memory session backend")
+    return SessionStore(timeout_seconds=timeout_seconds)
 
 
 def create_app() -> FastAPI:
@@ -79,8 +92,10 @@ def create_app() -> FastAPI:
         logger.info("LangGraph checkpointer enabled: MemorySaver")
 
     # Initialize session store
-    session_timeout = int(os.getenv("SESSION_TIMEOUT_SECONDS", "1800"))
-    session_store = SessionStore(timeout_seconds=session_timeout)
+    session_timeout = int(
+        os.getenv("SESSION_TIMEOUT_SECONDS", str(DEFAULT_SESSION_TIMEOUT_SECONDS))
+    )
+    session_store = _build_session_store(timeout_seconds=session_timeout)
 
     # Configure routes with dependencies
     configure_routes(session_store, llm, graph)

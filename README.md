@@ -234,6 +234,12 @@ FormPilot AI works with any **OpenAI-compatible** chat completions endpoint. Thi
 | `CUSTOM_LLM_API_ENDPOINT` | Full URL of the chat completions endpoint |
 | `CUSTOM_LLM_API_KEY` | API key / bearer token |
 | `CUSTOM_LLM_MODEL_NAME` | Model identifier (defaults to `"default"`) |
+| `LLM_SSL_VERIFY` | Enable TLS certificate verification for LLM HTTP calls (`true`/`false`, default `true`) |
+| `LOG_LLM_CURL` | Log sanitized LLM curl requests for debugging (`true`/`false`, default `false`) |
+| `ENABLE_LANGGRAPH_CHECKPOINTER` | Enable LangGraph `MemorySaver` checkpointer (`true`/`false`, default `false`) |
+| `SESSION_BACKEND` | Session persistence backend: `memory` or `sqlite` (default `memory`) |
+| `SESSION_SQLITE_PATH` | SQLite DB path used when `SESSION_BACKEND=sqlite` |
+| `SESSION_TIMEOUT_SECONDS` | Session expiration timeout in seconds (default `1800`) |
 
 Under the hood, it uses LangChain's `ChatOpenAI` with a custom `base_url`, orchestrated by a LangGraph state machine.
 

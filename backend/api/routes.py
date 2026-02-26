@@ -90,7 +90,11 @@ async def chat(request: ChatRequest):
     conversation_id = request.conversation_id
 
     if conversation_id:
-        session = _session_store.get_session(conversation_id)
+        try:
+            # Durable stores may need llm to rehydrate runtime state.
+            session = _session_store.get_session(conversation_id, llm=_llm)
+        except TypeError:
+            session = _session_store.get_session(conversation_id)
 
     # Create new session if needed
     if session is None:
@@ -118,8 +122,12 @@ async def chat(request: ChatRequest):
             detail=f"Error processing message: {str(e)}",
         )
 
-    # Persist the updated state back to the session
-    session.state = result_state
+    # Persist the updated state back to the store
+    if hasattr(_session_store, "save_session"):
+        _session_store.save_session(conversation_id, result_state)
+    else:
+        # Backward compatibility with simple in-memory store.
+        session.state = result_state
 
     return ChatResponse(
         action=result_state.get("action", {}),
